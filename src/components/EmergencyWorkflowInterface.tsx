@@ -293,11 +293,7 @@ export const EmergencyWorkflowInterface: React.FC<EmergencyWorkflowInterfaceProp
         smartDelivery: useSmartDelivery,
         assignedDocuments: documentAssignments
       },
-      comments: [{
-        author: user?.fullName || user?.name || userRole,
-        date: new Date().toISOString().split('T')[0],
-        message: `Emergency document submitted with ${emergencyDoc.urgencyLevel} priority. ${emergencyData.autoEscalation ? 'Auto-escalation enabled.' : ''}`
-      }]
+      comments: []
     };
 
     // Save to submitted documents for Track Documents page

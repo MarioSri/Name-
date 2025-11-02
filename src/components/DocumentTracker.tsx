@@ -100,7 +100,7 @@ const mockDocuments: Document[] = [
     type: 'Letter',
     submittedBy: 'Prof. Alex Martinez',
     submittedDate: '2024-01-20',
-    status: 'in-review',
+    status: 'pending',
     priority: 'medium',
     workflow: {
       currentStep: 'HOD Review',
@@ -617,12 +617,7 @@ export const DocumentTracker: React.FC<DocumentTrackerProps> = ({ userRole, onVi
                     Pending
                   </div>
                 </SelectItem>
-                <SelectItem value="in-review">
-                  <div className="flex items-center gap-2">
-                    <FileClock className="h-4 w-4 text-blue-600" />
-                    In Review
-                  </div>
-                </SelectItem>
+
                 <SelectItem value="approved">
                   <div className="flex items-center gap-2">
                     <CheckCircle className="h-4 w-4 text-green-600" />
@@ -772,9 +767,9 @@ export const DocumentTracker: React.FC<DocumentTrackerProps> = ({ userRole, onVi
                         </>
                       ) : (
                         <>
-                          <span>Digital Signature Required</span>
-                          <Badge variant="outline" className="bg-yellow-50 text-yellow-700 border-yellow-300">
-                            Pending Signature
+                          <span>Signed by Recipients</span>
+                          <Badge variant="outline" className="bg-green-50 text-green-700 border-green-300">
+                            Signature
                           </Badge>
                         </>
                       )}

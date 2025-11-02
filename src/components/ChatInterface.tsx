@@ -1231,14 +1231,7 @@ Generated on: ${new Date().toLocaleString()}`;
                   <Copy className="w-4 h-4 mr-2" />
                   Copy
                 </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => handleSelectMessage(message.id)}>
-                  <CheckSquare className="w-4 h-4 mr-2" />
-                  {selectedMessages.includes(message.id) ? 'Deselect' : 'Select'}
-                </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => handlePinMessage(message.id)}>
-                  <Pin className="w-4 h-4 mr-2" />
-                  {pinnedMessages.includes(message.id) ? 'Unpin' : 'Pin'}
-                </DropdownMenuItem>
+
                 <DropdownMenuItem onClick={() => setReplyingTo(message)}>
                   <Reply className="w-4 h-4 mr-2" />
                   Reply
