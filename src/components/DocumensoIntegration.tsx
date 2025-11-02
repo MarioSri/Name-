@@ -8,7 +8,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
-import { CheckCircle2, FileText, PenTool, Shield, User, Calendar, Download, Upload, Eye, Settings, Signature, Lock, Globe, Mail, Phone, Camera, Scan, Bot, Target, Zap, MapPin, Search, Loader2, ZoomIn, ZoomOut, RotateCw } from 'lucide-react';
+import { CheckCircle2, FileText, PenTool, Shield, User, Calendar, Download, Upload, Eye, Settings, Signature, Lock, Globe, Mail, Phone, Camera, Scan, Bot, Target, Zap, MapPin, Search, Loader2, ZoomIn, ZoomOut, RotateCw, X, RotateCcw, Move } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { aiSignaturePlacement, SignatureZone, DocumentAnalysis } from '@/services/aiSignaturePlacement';
 import { SignaturePlacementPreview } from '@/components/SignaturePlacementPreview';
@@ -63,6 +63,7 @@ export const DocumensoIntegration: React.FC<DocumensoIntegrationProps> = ({
   const [isDrawing, setIsDrawing] = useState(false);
   const [brushSize, setBrushSize] = useState(2);
   const [brushColor, setBrushColor] = useState('#000000');
+  const [points, setPoints] = useState<Array<{x: number, y: number}>>([]);
   const [savedSignatures, setSavedSignatures] = useState<Array<{id: string, name: string, data: string, type: 'draw' | 'upload'}>>([]);
   const [showLibrary, setShowLibrary] = useState(false);
   const [showFileViewer, setShowFileViewer] = useState(false);
@@ -71,8 +72,40 @@ export const DocumensoIntegration: React.FC<DocumensoIntegrationProps> = ({
   const [fileError, setFileError] = useState<string | null>(null);
   const [fileZoom, setFileZoom] = useState(100);
   const [fileRotation, setFileRotation] = useState(0);
+  
+  // Signature placement on document
+  const [placedSignatures, setPlacedSignatures] = useState<Array<{
+    id: string;
+    data: string;
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    rotation: number;
+  }>>([]);
+  const [selectedSignatureId, setSelectedSignatureId] = useState<string | null>(null);
+  const [isDragging, setIsDragging] = useState(false);
+  const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
+  const [isResizing, setIsResizing] = useState(false);
+  const [resizeCorner, setResizeCorner] = useState<'tl' | 'tr' | 'bl' | 'br' | null>(null);
+  
+  // Signature field state (the green box)
+  const [signatureField, setSignatureField] = useState({
+    x: 100,
+    y: 300,
+    width: 200,
+    height: 80,
+    rotation: 0
+  });
+  const [isFieldSelected, setIsFieldSelected] = useState(false);
+  const [isFieldDragging, setIsFieldDragging] = useState(false);
+  const [isFieldResizing, setIsFieldResizing] = useState(false);
+  const [fieldResizeCorner, setFieldResizeCorner] = useState<'tl' | 'tr' | 'bl' | 'br' | null>(null);
+  const [fieldDragOffset, setFieldDragOffset] = useState({ x: 0, y: 0 });
+  
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
+  const previewContainerRef = useRef<HTMLDivElement>(null);
   const { toast } = useToast();
   
   const documensoAPI = useDocumensoAPI({
@@ -176,55 +209,8 @@ export const DocumensoIntegration: React.FC<DocumensoIntegrationProps> = ({
     setFileContent({ type: 'image', url });
   };
 
-  const analyzeDocumentForSignatures = async () => {
-    setIsAnalyzing(true);
-    
-    try {
-      // Real AI-powered document analysis
-      const analysisSteps = [
-        { message: 'Scanning document structure...', progress: 20 },
-        { message: 'Detecting text patterns...', progress: 40 },
-        { message: 'Analyzing whitespace zones...', progress: 60 },
-        { message: 'Applying ML signature detection...', progress: 80 },
-        { message: 'Optimizing placement coordinates...', progress: 100 }
-      ];
-
-      for (const step of analysisSteps) {
-        await new Promise(resolve => setTimeout(resolve, 600));
-        toast({
-          title: "AI Document Analysis",
-          description: step.message,
-        });
-      }
-
-      // Use AI service for real analysis
-      const analysis = await aiSignaturePlacement.analyzeDocument(
-        document.content,
-        document.type
-      );
-      
-      setDocumentAnalysis(analysis);
-      setDetectedSignatureZones(analysis.signatureZones);
-      setSelectedZone(analysis.recommendedZone);
-      
-      toast({
-        title: "AI Analysis Complete",
-        description: `Found ${analysis.signatureZones.length} optimal zones. Recommended: ${Math.round(analysis.signatureZones.find(z => z.id === analysis.recommendedZone)?.confidence * 100 || 0)}% confidence`,
-      });
-    } catch (error) {
-      toast({
-        title: "Analysis Error",
-        description: "Failed to analyze document. Using fallback detection.",
-        variant: "destructive"
-      });
-    } finally {
-      setIsAnalyzing(false);
-    }
-  };
-
   const handleSign = async () => {
     setIsProcessing(true);
-    setActiveTab('complete');
     
     try {
       
@@ -271,25 +257,53 @@ export const DocumensoIntegration: React.FC<DocumensoIntegrationProps> = ({
     }
   };
 
+  const smoothSignature = (pts: Array<{x: number, y: number}>) => {
+    const canvas = canvasRef.current;
+    if (!canvas || pts.length < 2) return;
+    
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.strokeStyle = brushColor;
+    ctx.lineWidth = brushSize;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.shadowColor = brushColor;
+    ctx.shadowBlur = 0.5;
+    ctx.globalCompositeOperation = 'source-over';
+    
+    ctx.beginPath();
+    ctx.moveTo(pts[0].x, pts[0].y);
+    
+    for (let i = 1; i < pts.length - 2; i++) {
+      const xc = (pts[i].x + pts[i + 1].x) / 2;
+      const yc = (pts[i].y + pts[i + 1].y) / 2;
+      ctx.quadraticCurveTo(pts[i].x, pts[i].y, xc, yc);
+    }
+    
+    if (pts.length > 2) {
+      ctx.quadraticCurveTo(
+        pts[pts.length - 2].x,
+        pts[pts.length - 2].y,
+        pts[pts.length - 1].x,
+        pts[pts.length - 1].y
+      );
+    }
+    
+    ctx.stroke();
+  };
+
   const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
     setIsDrawing(true);
     const canvas = canvasRef.current;
     if (!canvas) return;
     
     const rect = canvas.getBoundingClientRect();
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-    
-    ctx.strokeStyle = brushColor;
-    ctx.lineWidth = brushSize;
-    ctx.lineCap = 'round';
-    ctx.lineJoin = 'round';
-    
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
     
-    ctx.beginPath();
-    ctx.moveTo(x, y);
+    setPoints([{x, y}]);
   };
 
   const handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
@@ -299,18 +313,21 @@ export const DocumensoIntegration: React.FC<DocumensoIntegrationProps> = ({
     if (!canvas) return;
     
     const rect = canvas.getBoundingClientRect();
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-    
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
     
-    ctx.lineTo(x, y);
-    ctx.stroke();
+    setPoints(prev => {
+      const newPoints = [...prev, {x, y}];
+      smoothSignature(newPoints);
+      return newPoints;
+    });
   };
 
   const handleMouseUp = () => {
     setIsDrawing(false);
+    if (points.length > 0) {
+      smoothSignature(points);
+    }
   };
 
   const handleTouchStart = (e: React.TouchEvent<HTMLCanvasElement>) => {
@@ -320,20 +337,11 @@ export const DocumensoIntegration: React.FC<DocumensoIntegrationProps> = ({
     if (!canvas) return;
     
     const rect = canvas.getBoundingClientRect();
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-    
-    ctx.strokeStyle = brushColor;
-    ctx.lineWidth = brushSize;
-    ctx.lineCap = 'round';
-    ctx.lineJoin = 'round';
-    
     const touch = e.touches[0];
     const x = touch.clientX - rect.left;
     const y = touch.clientY - rect.top;
     
-    ctx.beginPath();
-    ctx.moveTo(x, y);
+    setPoints([{x, y}]);
   };
 
   const handleTouchMove = (e: React.TouchEvent<HTMLCanvasElement>) => {
@@ -344,20 +352,23 @@ export const DocumensoIntegration: React.FC<DocumensoIntegrationProps> = ({
     if (!canvas) return;
     
     const rect = canvas.getBoundingClientRect();
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-    
     const touch = e.touches[0];
     const x = touch.clientX - rect.left;
     const y = touch.clientY - rect.top;
     
-    ctx.lineTo(x, y);
-    ctx.stroke();
+    setPoints(prev => {
+      const newPoints = [...prev, {x, y}];
+      smoothSignature(newPoints);
+      return newPoints;
+    });
   };
 
   const handleTouchEnd = (e: React.TouchEvent<HTMLCanvasElement>) => {
     e.preventDefault();
     setIsDrawing(false);
+    if (points.length > 0) {
+      smoothSignature(points);
+    }
   };
 
   const clearSignature = () => {
@@ -368,13 +379,19 @@ export const DocumensoIntegration: React.FC<DocumensoIntegrationProps> = ({
     if (!ctx) return;
     
     ctx.clearRect(0, 0, canvas.width, canvas.height);
+    setPoints([]);
   };
 
   const saveDrawnSignature = () => {
     const canvas = canvasRef.current;
-    if (!canvas) return;
+    if (!canvas) {
+      console.error('Canvas not found');
+      return;
+    }
     
     const dataUrl = canvas.toDataURL();
+    console.log('Drawn signature data URL length:', dataUrl.length);
+    
     const newSignature = {
       id: Date.now().toString(),
       name: `Signature ${savedSignatures.length + 1}`,
@@ -383,53 +400,304 @@ export const DocumensoIntegration: React.FC<DocumensoIntegrationProps> = ({
     };
     
     setSavedSignatures(prev => [...prev, newSignature]);
+    
+    // Automatically place signature on document
+    placeSignatureOnDocument(dataUrl);
+    
     toast({
-      title: "Signature Saved",
-      description: "Your signature has been saved to the library"
+      title: "Signature Saved and Placed",
+      description: "Signature has been saved to library and placed on document."
     });
+  };
+
+  // Place signature on document preview - Inside signature field box
+  const placeSignatureOnDocument = (signatureData: string) => {
+    const newPlacedSignature = {
+      id: Date.now().toString(),
+      data: signatureData,
+      x: signatureField.x, // Use signature field position
+      y: signatureField.y,
+      width: signatureField.width, // Use signature field size
+      height: signatureField.height,
+      rotation: signatureField.rotation // Match field rotation
+    };
+    
+    console.log('Placing signature at:', newPlacedSignature);
+    console.log('Signature field:', signatureField);
+    
+    setPlacedSignatures(prev => [...prev, newPlacedSignature]);
+    setSelectedSignatureId(newPlacedSignature.id);
+    
+    toast({
+      title: "Signature Placed",
+      description: `Signature placed inside field box at (${signatureField.x}, ${signatureField.y})`
+    });
+  };
+
+  // Handle signature drag
+  const handleSignatureMouseDown = (e: React.MouseEvent, sigId: string) => {
+    e.stopPropagation();
+    const signature = placedSignatures.find(s => s.id === sigId);
+    if (!signature) return;
+
+    setSelectedSignatureId(sigId);
+    setIsDragging(true);
+    
+    const rect = previewContainerRef.current?.getBoundingClientRect();
+    if (!rect) return;
+
+    setDragOffset({
+      x: e.clientX - signature.x,
+      y: e.clientY - signature.y
+    });
+  };
+
+  // Handle resize corner drag
+  const handleResizeMouseDown = (e: React.MouseEvent, sigId: string, corner: 'tl' | 'tr' | 'bl' | 'br') => {
+    e.stopPropagation();
+    setSelectedSignatureId(sigId);
+    setIsResizing(true);
+    setResizeCorner(corner);
+  };
+
+  // Handle mouse move for drag/resize
+  const handlePreviewMouseMove = (e: React.MouseEvent) => {
+    if (!selectedSignatureId) return;
+
+    if (isDragging) {
+      const rect = previewContainerRef.current?.getBoundingClientRect();
+      if (!rect) return;
+
+      setPlacedSignatures(prev => prev.map(sig => {
+        if (sig.id === selectedSignatureId) {
+          return {
+            ...sig,
+            x: e.clientX - dragOffset.x,
+            y: e.clientY - dragOffset.y
+          };
+        }
+        return sig;
+      }));
+    } else if (isResizing && resizeCorner) {
+      const signature = placedSignatures.find(s => s.id === selectedSignatureId);
+      if (!signature) return;
+
+      const rect = previewContainerRef.current?.getBoundingClientRect();
+      if (!rect) return;
+
+      const mouseX = e.clientX - rect.left;
+      const mouseY = e.clientY - rect.top;
+
+      setPlacedSignatures(prev => prev.map(sig => {
+        if (sig.id === selectedSignatureId) {
+          let newWidth = sig.width;
+          let newHeight = sig.height;
+          let newX = sig.x;
+          let newY = sig.y;
+
+          switch (resizeCorner) {
+            case 'br': // Bottom right
+              newWidth = Math.max(50, mouseX - sig.x);
+              newHeight = Math.max(30, mouseY - sig.y);
+              break;
+            case 'bl': // Bottom left
+              newWidth = Math.max(50, sig.x + sig.width - mouseX);
+              newHeight = Math.max(30, mouseY - sig.y);
+              newX = mouseX;
+              break;
+            case 'tr': // Top right
+              newWidth = Math.max(50, mouseX - sig.x);
+              newHeight = Math.max(30, sig.y + sig.height - mouseY);
+              newY = mouseY;
+              break;
+            case 'tl': // Top left
+              newWidth = Math.max(50, sig.x + sig.width - mouseX);
+              newHeight = Math.max(30, sig.y + sig.height - mouseY);
+              newX = mouseX;
+              newY = mouseY;
+              break;
+          }
+
+          return { ...sig, width: newWidth, height: newHeight, x: newX, y: newY };
+        }
+        return sig;
+      }));
+    }
+  };
+
+  const handlePreviewMouseUp = () => {
+    setIsDragging(false);
+    setIsResizing(false);
+    setResizeCorner(null);
+  };
+
+  // Rotate signature
+  const rotateSignature = (sigId: string) => {
+    setPlacedSignatures(prev => prev.map(sig => {
+      if (sig.id === sigId) {
+        return { ...sig, rotation: (sig.rotation + 90) % 360 };
+      }
+      return sig;
+    }));
+  };
+
+  // Delete signature
+  const deleteSignature = (sigId: string) => {
+    setPlacedSignatures(prev => prev.filter(sig => sig.id !== sigId));
+    setSelectedSignatureId(null);
+  };
+
+  // ===== SIGNATURE FIELD HANDLERS =====
+  
+  // Handle signature field drag
+  const handleFieldMouseDown = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setIsFieldSelected(true);
+    setIsFieldDragging(true);
+    setSelectedSignatureId(null); // Deselect any placed signatures
+
+    const rect = previewContainerRef.current?.getBoundingClientRect();
+    if (!rect) return;
+
+    setFieldDragOffset({
+      x: e.clientX - rect.left - signatureField.x,
+      y: e.clientY - rect.top - signatureField.y
+    });
+  };
+
+  // Handle field resize corner drag
+  const handleFieldResizeMouseDown = (e: React.MouseEvent, corner: 'tl' | 'tr' | 'bl' | 'br') => {
+    e.stopPropagation();
+    e.preventDefault();
+    setIsFieldSelected(true);
+    setIsFieldResizing(true);
+    setFieldResizeCorner(corner);
+    setSelectedSignatureId(null);
+  };
+
+  // Handle field mouse move for drag/resize
+  const handleFieldMouseMove = (e: React.MouseEvent) => {
+    const rect = previewContainerRef.current?.getBoundingClientRect();
+    if (!rect) return;
+
+    const mouseX = e.clientX - rect.left;
+    const mouseY = e.clientY - rect.top;
+
+    if (isFieldDragging) {
+      setSignatureField(prev => ({
+        ...prev,
+        x: mouseX - fieldDragOffset.x,
+        y: mouseY - fieldDragOffset.y
+      }));
+    } else if (isFieldResizing && fieldResizeCorner) {
+      setSignatureField(prev => {
+        let newWidth = prev.width;
+        let newHeight = prev.height;
+        let newX = prev.x;
+        let newY = prev.y;
+
+        switch (fieldResizeCorner) {
+          case 'br': // Bottom right
+            newWidth = Math.max(100, mouseX - prev.x);
+            newHeight = Math.max(50, mouseY - prev.y);
+            break;
+          case 'bl': // Bottom left
+            newWidth = Math.max(100, prev.x + prev.width - mouseX);
+            newHeight = Math.max(50, mouseY - prev.y);
+            newX = mouseX;
+            break;
+          case 'tr': // Top right
+            newWidth = Math.max(100, mouseX - prev.x);
+            newHeight = Math.max(50, prev.y + prev.height - mouseY);
+            newY = mouseY;
+            break;
+          case 'tl': // Top left
+            newWidth = Math.max(100, prev.x + prev.width - mouseX);
+            newHeight = Math.max(50, prev.y + prev.height - mouseY);
+            newX = mouseX;
+            newY = mouseY;
+            break;
+        }
+
+        return { ...prev, width: newWidth, height: newHeight, x: newX, y: newY };
+      });
+    }
+  };
+
+  // Rotate signature field
+  const rotateSignatureField = () => {
+    setSignatureField(prev => ({
+      ...prev,
+      rotation: (prev.rotation + 90) % 360
+    }));
+  };
+
+  // Delete signature field
+  const deleteSignatureField = () => {
+    // Reset to default position
+    setSignatureField({
+      x: 100,
+      y: 300,
+      width: 200,
+      height: 80,
+      rotation: 0
+    });
+    setIsFieldSelected(false);
+    
+    toast({
+      title: "Signature Field Reset",
+      description: "The signature field has been reset to default position"
+    });
+  };
+
+  // Combined mouse move handler
+  const handleCombinedMouseMove = (e: React.MouseEvent) => {
+    if (isFieldDragging || isFieldResizing) {
+      handleFieldMouseMove(e);
+    } else if (isDragging || isResizing) {
+      handlePreviewMouseMove(e);
+    }
+  };
+
+  // Combined mouse up handler
+  const handleCombinedMouseUp = () => {
+    setIsFieldDragging(false);
+    setIsFieldResizing(false);
+    setFieldResizeCorner(null);
+    handlePreviewMouseUp();
   };
 
   const saveUploadedSignature = (file: File) => {
     const reader = new FileReader();
     reader.onload = (e) => {
+      const signatureData = e.target?.result as string;
       const newSignature = {
         id: Date.now().toString(),
         name: file.name,
-        data: e.target?.result as string,
+        data: signatureData,
         type: 'upload' as const
       };
       
       setSavedSignatures(prev => [...prev, newSignature]);
+      
+      // Automatically place signature on document
+      placeSignatureOnDocument(signatureData);
+      
       toast({
-        title: "Signature Saved",
-        description: "Your uploaded signature has been saved to the library"
+        title: "Signature Saved and Placed",
+        description: "Your uploaded signature has been saved to library and placed on document."
       });
     };
     reader.readAsDataURL(file);
   };
 
   const loadSavedSignature = (signature: typeof savedSignatures[0]) => {
-    if (signature.type === 'draw') {
-      const canvas = canvasRef.current;
-      if (!canvas) return;
-      
-      const ctx = canvas.getContext('2d');
-      if (!ctx) return;
-      
-      const img = new Image();
-      img.onload = () => {
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
-        ctx.drawImage(img, 0, 0);
-      };
-      img.src = signature.data;
-    } else {
-      setCapturedSignature(signature.data);
-      setSignatureMethod('upload');
-    }
+    // Place signature directly on document
+    placeSignatureOnDocument(signature.data);
     
     toast({
-      title: "Signature Loaded",
-      description: `${signature.name} has been loaded`
+      title: "Signature Placed",
+      description: `${signature.name} has been placed on the document`
     });
   };
 
@@ -487,9 +755,12 @@ export const DocumensoIntegration: React.FC<DocumensoIntegrationProps> = ({
     setCapturedSignature(imageData);
     stopCamera();
     
+    // Automatically place signature on document
+    placeSignatureOnDocument(imageData);
+    
     toast({
-      title: "Signature Captured",
-      description: "Signature captured successfully. Review and confirm.",
+      title: "Signature Captured and Placed",
+      description: "Signature has been captured and placed on document."
     });
   };
 
@@ -538,7 +809,15 @@ export const DocumensoIntegration: React.FC<DocumensoIntegrationProps> = ({
 
 
                     {/* Embedded Document Preview - Enhanced Scrolling with Increased Height */}
-                    <div className="flex-1 overflow-y-auto overflow-x-hidden border-t bg-gray-50 scroll-smooth" style={{ maxHeight: 'calc(80vh - 180px)', minHeight: '500px' }}>
+                    <div 
+                      ref={previewContainerRef}
+                      className="flex-1 overflow-y-auto overflow-x-hidden border-t bg-gray-50 scroll-smooth relative" 
+                      style={{ maxHeight: 'calc(80vh - 180px)', minHeight: '500px' }}
+                      onMouseMove={handleCombinedMouseMove}
+                      onMouseUp={handleCombinedMouseUp}
+                      onMouseLeave={handleCombinedMouseUp}
+                      onClick={() => { setIsFieldSelected(false); setSelectedSignatureId(null); }}
+                    >
                       {fileLoading ? (
                         <div className="flex items-center justify-center h-full p-8 min-h-[400px]">
                           <div className="text-center">
@@ -555,7 +834,7 @@ export const DocumensoIntegration: React.FC<DocumensoIntegrationProps> = ({
                           </div>
                         </div>
                       ) : fileContent ? (
-                        <div className="p-4 pb-8 w-full">
+                        <div className="p-4 pb-8 w-full relative">
                           {/* Zoom and Rotation Controls */}
                           <div className="flex items-center justify-center gap-2 mb-4 sticky top-0 bg-white/95 backdrop-blur-sm p-2 rounded-lg shadow-sm z-10">
                             <Button
@@ -669,6 +948,96 @@ export const DocumensoIntegration: React.FC<DocumensoIntegrationProps> = ({
                               </div>
                             )}
                           </div>
+
+
+
+                          {/* Placed Signatures Overlay */}
+                          {placedSignatures.map((signature) => (
+                            <div
+                              key={signature.id}
+                              className={`absolute cursor-move select-none ${selectedSignatureId === signature.id ? 'ring-4 ring-blue-500' : 'ring-2 ring-gray-300'}`}
+                              style={{
+                                left: `${signature.x}px`,
+                                top: `${signature.y}px`,
+                                width: `${signature.width}px`,
+                                height: `${signature.height}px`,
+                                transform: `rotate(${signature.rotation}deg)`,
+                                transformOrigin: 'center',
+                                zIndex: selectedSignatureId === signature.id ? 50 : 40,
+                              }}
+                              onMouseDown={(e) => handleSignatureMouseDown(e, signature.id)}
+                            >
+                              {/* Signature Image */}
+                              <img
+                                src={signature.data}
+                                alt="Signature"
+                                className="w-full h-full object-contain bg-white/90 backdrop-blur-sm rounded border-2 border-gray-200"
+                                draggable={false}
+                                onError={(e) => console.error('Image failed to load:', signature.id)}
+                                onLoad={() => console.log('Image loaded successfully:', signature.id)}
+                              />
+
+                              {/* Control Buttons (when selected) */}
+                              {selectedSignatureId === signature.id && (
+                                <div className="absolute -top-10 left-0 right-0 flex justify-center gap-1 bg-white/95 backdrop-blur-sm rounded-t-lg border border-b-0 border-blue-500 p-1">
+                                  <Button
+                                    size="sm"
+                                    variant="ghost"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      rotateSignature(signature.id);
+                                    }}
+                                    className="h-7 px-2"
+                                    title="Rotate 90°"
+                                  >
+                                    <RotateCcw className="w-4 h-4" />
+                                  </Button>
+                                  <Button
+                                    size="sm"
+                                    variant="ghost"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      deleteSignature(signature.id);
+                                    }}
+                                    className="h-7 px-2 text-red-600 hover:text-red-700 hover:bg-red-50"
+                                    title="Delete"
+                                  >
+                                    <X className="w-4 h-4" />
+                                  </Button>
+                                  <div className="flex items-center px-2 text-xs text-gray-600">
+                                    <Move className="w-3 h-3 mr-1" />
+                                    Drag
+                                  </div>
+                                </div>
+                              )}
+
+                              {/* Resize Corners (when selected) */}
+                              {selectedSignatureId === signature.id && (
+                                <>
+                                  {/* Top Left */}
+                                  <div
+                                    className="absolute -top-2 -left-2 w-4 h-4 bg-blue-500 rounded-full cursor-nwse-resize hover:bg-blue-600 border-2 border-white shadow-md"
+                                    onMouseDown={(e) => handleResizeMouseDown(e, signature.id, 'tl')}
+                                  />
+                                  {/* Top Right */}
+                                  <div
+                                    className="absolute -top-2 -right-2 w-4 h-4 bg-blue-500 rounded-full cursor-nesw-resize hover:bg-blue-600 border-2 border-white shadow-md"
+                                    onMouseDown={(e) => handleResizeMouseDown(e, signature.id, 'tr')}
+                                  />
+                                  {/* Bottom Left */}
+                                  <div
+                                    className="absolute -bottom-2 -left-2 w-4 h-4 bg-blue-500 rounded-full cursor-nesw-resize hover:bg-blue-600 border-2 border-white shadow-md"
+                                    onMouseDown={(e) => handleResizeMouseDown(e, signature.id, 'bl')}
+                                  />
+                                  {/* Bottom Right */}
+                                  <div
+                                    className="absolute -bottom-2 -right-2 w-4 h-4 bg-blue-500 rounded-full cursor-nwse-resize hover:bg-blue-600 border-2 border-white shadow-md"
+                                    onMouseDown={(e) => handleResizeMouseDown(e, signature.id, 'br')}
+                                  />
+                                </>
+                              )}
+                            </div>
+                          ))}
                         </div>
                       ) : (
                         <div className="flex items-center justify-center h-full p-8">
@@ -698,11 +1067,10 @@ export const DocumensoIntegration: React.FC<DocumensoIntegrationProps> = ({
           {/* Right Column - Signature Interaction & CTA */}
           <div className="pl-6">
             <Tabs value={activeTab} onValueChange={setActiveTab} className="h-full flex flex-col">
-              <TabsList className="grid w-full grid-cols-4 mb-4">
+              <TabsList className="grid w-full grid-cols-3 mb-4">
                 <TabsTrigger value="signature">Sign</TabsTrigger>
                 <TabsTrigger value="library">Library</TabsTrigger>
                 <TabsTrigger value="verification">Verify</TabsTrigger>
-                <TabsTrigger value="complete">Complete</TabsTrigger>
               </TabsList>
 
 
@@ -869,9 +1237,16 @@ export const DocumensoIntegration: React.FC<DocumensoIntegrationProps> = ({
                               <Camera className="w-4 h-4 mr-2" />
                               Retake
                             </Button>
-                            <Button onClick={() => toast({ title: "Signature Accepted", description: "Signature ready for signing" })}>
+                            <Button 
+                              onClick={() => {
+                                if (capturedSignature) {
+                                  placeSignatureOnDocument(capturedSignature);
+                                  toast({ title: "Signature Placed", description: "Signature has been placed on the document. You can now move, resize, or rotate it." });
+                                }
+                              }}
+                            >
                               <CheckCircle2 className="w-4 h-4 mr-2" />
-                              Use This Signature
+                              Place on Document
                             </Button>
                           </div>
                         </div>
@@ -1030,21 +1405,8 @@ export const DocumensoIntegration: React.FC<DocumensoIntegrationProps> = ({
                   </p>
                 </div>
                 
-                <div className="flex justify-between">
-                  <Button variant="outline" onClick={() => setActiveTab('signature')}>Back</Button>
-                  <Button onClick={handleVerification} disabled={verificationCode.length !== 6}>
-                    Verify & Sign
-                  </Button>
-                </div>
-              </CardContent>
-            </Card>
-              </TabsContent>
-
-              <TabsContent value="complete" className="flex-1 overflow-y-auto">
-            <Card>
-              <CardContent className="p-8 text-center">
                 {isProcessing ? (
-                  <div className="space-y-4">
+                  <div className="space-y-4 text-center">
                     <div className="w-16 h-16 mx-auto bg-blue-100 rounded-full flex items-center justify-center">
                       <PenTool className="w-8 h-8 text-blue-600 animate-pulse" />
                     </div>
@@ -1053,7 +1415,7 @@ export const DocumensoIntegration: React.FC<DocumensoIntegrationProps> = ({
                     <p className="text-sm text-muted-foreground">{signingProgress}% Complete</p>
                   </div>
                 ) : isCompleted ? (
-                  <div className="space-y-4">
+                  <div className="space-y-4 text-center">
                     <div className="w-16 h-16 mx-auto bg-green-100 rounded-full flex items-center justify-center">
                       <CheckCircle2 className="w-8 h-8 text-green-600" />
                     </div>
@@ -1073,19 +1435,18 @@ export const DocumensoIntegration: React.FC<DocumensoIntegrationProps> = ({
                     </div>
                   </div>
                 ) : (
-                  <div className="space-y-4">
-                    <div className="w-16 h-16 mx-auto bg-gray-100 rounded-full flex items-center justify-center">
-                      <FileText className="w-8 h-8 text-gray-600" />
-                    </div>
-                    <h3 className="text-lg font-semibold">Ready to Sign</h3>
-                    <p className="text-sm text-muted-foreground">
-                      Complete the verification process to proceed with signing.
-                    </p>
+                  <div className="flex justify-between">
+                    <Button variant="outline" onClick={() => setActiveTab('signature')}>Back</Button>
+                    <Button onClick={handleVerification} disabled={verificationCode.length !== 6}>
+                      Verify
+                    </Button>
                   </div>
                 )}
               </CardContent>
             </Card>
               </TabsContent>
+
+
             </Tabs>
           </div>
         </div>
