@@ -33,6 +33,7 @@ import {
 } from "lucide-react";
 import { DigitalSignature } from "./DigitalSignature";
 import { useToast } from "@/hooks/use-toast";
+import isJpg from 'is-jpg';
 
 interface DocumentTrackerProps {
   userRole: string;
@@ -223,6 +224,8 @@ export const DocumentTracker: React.FC<DocumentTrackerProps> = ({ userRole, onVi
   useEffect(() => {
     const loadSubmittedDocuments = () => {
       const stored = JSON.parse(localStorage.getItem('submitted-documents') || '[]');
+      console.log('📄 [Track Documents] Loading submitted documents:', stored.length, 'documents');
+      console.log('📋 [Track Documents] Documents:', stored.map(doc => ({ id: doc.id, title: doc.title, submittedBy: doc.submittedBy })));
       setSubmittedDocuments(stored);
     };
     
@@ -231,22 +234,30 @@ export const DocumentTracker: React.FC<DocumentTrackerProps> = ({ userRole, onVi
     };
 
     const handleEmergencyDocumentCreated = (event: CustomEvent) => {
+      console.log('🚨 [Track Documents] Emergency document event received:', event.detail);
       const { document: emergencyDoc } = event.detail;
-      setSubmittedDocuments(prev => {
-        // Check if document already exists to avoid duplicates
-        const exists = prev.some(doc => doc.id === emergencyDoc.id);
-        if (!exists) {
-          return [emergencyDoc, ...prev];
-        }
-        return prev;
-      });
       
-      // Show notification that emergency document card was created
-      toast({
-        title: "Emergency Document Card Created",
-        description: `${emergencyDoc.title} is now visible with emergency features applied`,
-        duration: 5000,
-      });
+      if (emergencyDoc) {
+        console.log('📋 [Track Documents] Adding emergency document:', emergencyDoc.title);
+        setSubmittedDocuments(prev => {
+          // Check if document already exists to avoid duplicates
+          const exists = prev.some(doc => doc.id === emergencyDoc.id);
+          if (!exists) {
+            console.log('✅ [Track Documents] Emergency document added to state');
+            return [emergencyDoc, ...prev];
+          } else {
+            console.log('ℹ️ [Track Documents] Emergency document already exists, skipping');
+            return prev;
+          }
+        });
+        
+        // Show notification that emergency document card was created
+        toast({
+          title: "Emergency Document Card Created",
+          description: `${emergencyDoc.title} is now visible with emergency features applied`,
+          duration: 5000,
+        });
+      }
     };
     
     // Save track documents to localStorage for search
@@ -287,9 +298,37 @@ export const DocumentTracker: React.FC<DocumentTrackerProps> = ({ userRole, onVi
     loadApprovalComments();
     saveTrackDocuments();
     
+    // Listen for document submission events
+    const handleDocumentSubmitted = (event?: any) => {
+      console.log('📢 [Track Documents] Document submission event received, reloading...', event?.detail);
+      loadSubmittedDocuments();
+      
+      // Show immediate feedback for new submissions
+      if (event?.detail?.trackingCard) {
+        const newCard = event.detail.trackingCard;
+        console.log('✨ [Track Documents] New tracking card received:', newCard.title);
+        
+        setSubmittedDocuments(prev => {
+          const exists = prev.some(doc => doc.id === newCard.id);
+          if (!exists) {
+            console.log('✅ [Track Documents] Adding new tracking card to state');
+            return [newCard, ...prev];
+          }
+          return prev;
+        });
+        
+        toast({
+          title: "Document Tracking Started",
+          description: `${newCard.title} is now being tracked`,
+          duration: 3000,
+        });
+      }
+    };
+    
     // Listen for storage changes
     const handleStorageChange = (e: StorageEvent) => {
       if (e.key === 'submitted-documents') {
+        console.log('📢 [Track Documents] Storage change detected for submitted-documents');
         loadSubmittedDocuments();
       } else if (e.key === 'user-profile') {
         loadUserProfile();
@@ -306,6 +345,9 @@ export const DocumentTracker: React.FC<DocumentTrackerProps> = ({ userRole, onVi
     window.addEventListener('approval-comments-changed', handleApprovalChanges);
     window.addEventListener('workflow-updated', handleWorkflowUpdate);
     window.addEventListener('emergency-document-created', handleEmergencyDocumentCreated as EventListener);
+    window.addEventListener('document-approval-created', handleDocumentSubmitted);
+    window.addEventListener('approval-card-created', handleDocumentSubmitted);
+    window.addEventListener('document-submitted', handleDocumentSubmitted);
     
     window.addEventListener('storage', handleStorageChange);
     return () => {
@@ -313,6 +355,9 @@ export const DocumentTracker: React.FC<DocumentTrackerProps> = ({ userRole, onVi
       window.removeEventListener('approval-comments-changed', handleApprovalChanges);
       window.removeEventListener('workflow-updated', handleWorkflowUpdate);
       window.removeEventListener('emergency-document-created', handleEmergencyDocumentCreated as EventListener);
+      window.removeEventListener('document-approval-created', handleDocumentSubmitted);
+      window.removeEventListener('approval-card-created', handleDocumentSubmitted);
+      window.removeEventListener('document-submitted', handleDocumentSubmitted);
     };
   }, []);
 
@@ -394,7 +439,20 @@ export const DocumentTracker: React.FC<DocumentTrackerProps> = ({ userRole, onVi
                          (doc as any).submittedByDesignation === userRole ||
                          (doc as any).submittedByDesignation === currentUserProfile.designation;
     
-    return notRemoved && matchesSearch && matchesStatus && matchesType && (isMockDocument || isOwnDocument);
+    const shouldShow = notRemoved && matchesSearch && matchesStatus && matchesType && (isMockDocument || isOwnDocument);
+    
+    if (!isMockDocument) {
+      console.log(`🔍 [Track Documents] Filtering document "${doc.title}":`, {
+        submittedBy: doc.submittedBy,
+        currentUserName: currentUserProfile.name,
+        userRole: userRole,
+        submittedByDesignation: (doc as any).submittedByDesignation,
+        isOwnDocument: isOwnDocument,
+        shouldShow: shouldShow
+      });
+    }
+    
+    return shouldShow;
   });
 
   const handleApprove = (docId: string) => {
@@ -837,6 +895,7 @@ export const DocumentTracker: React.FC<DocumentTrackerProps> = ({ userRole, onVi
                     // Check if document has multiple uploaded files
                     if (documentFiles && documentFiles.length > 0) {
                       try {
+                        console.log('📄 [Track Documents] Reconstructing files:', documentFiles.length, 'files');
                         // Reconstruct all files from base64
                         const reconstructedFiles: File[] = [];
                         
@@ -845,12 +904,76 @@ export const DocumentTracker: React.FC<DocumentTrackerProps> = ({ userRole, onVi
                           const fileType = file.type || 'application/octet-stream';
                           const fileData = file.data || file;
                           
+                          console.log('🔄 [Track Documents] Processing file:', {
+                            name: fileName,
+                            type: fileType,
+                            hasData: !!fileData,
+                            dataType: typeof fileData
+                          });
+                          
                           // If file has base64 data, reconstruct File object
                           if (typeof fileData === 'string' && fileData.startsWith('data:')) {
-                            const response = await fetch(fileData);
-                            const blob = await response.blob();
-                            const reconstructedFile = new File([blob], fileName, { type: fileType });
-                            reconstructedFiles.push(reconstructedFile);
+                            try {
+                              // Extract base64 data and MIME type from data URL
+                              const matches = fileData.match(/^data:([^;]+);base64,(.+)$/);
+                              if (!matches) {
+                                throw new Error('Invalid data URL format');
+                              }
+                              
+                              const mimeType = matches[1] || fileType;
+                              const base64Data = matches[2];
+                              
+                              console.log('📦 [Track Documents] Decoding base64:', {
+                                mimeType: mimeType,
+                                base64Length: base64Data.length
+                              });
+                              
+                              // Convert base64 to binary
+                              const binaryString = atob(base64Data);
+                              const bytes = new Uint8Array(binaryString.length);
+                              for (let i = 0; i < binaryString.length; i++) {
+                                bytes[i] = binaryString.charCodeAt(i);
+                              }
+                              
+                              // Validate JPEG files with is-jpg
+                              if (mimeType === 'image/jpeg' || mimeType === 'image/jpg' || 
+                                  fileName.toLowerCase().endsWith('.jpg') || fileName.toLowerCase().endsWith('.jpeg')) {
+                                
+                                console.log('🔍 [Track Documents] Validating JPEG with is-jpg:', fileName);
+                                const isValidJpg = isJpg(bytes);
+                                
+                                if (!isValidJpg) {
+                                  console.error('❌ [Track Documents] Invalid JPEG detected:', {
+                                    fileName,
+                                    size: bytes.length,
+                                    firstBytes: Array.from(bytes.slice(0, 10)),
+                                    lastBytes: Array.from(bytes.slice(-10))
+                                  });
+                                  throw new Error(`Invalid JPEG file: ${fileName}. The file signature does not match JPEG format.`);
+                                }
+                                
+                                console.log('✅ [Track Documents] JPEG validation passed for:', fileName);
+                              }
+                              
+                              // Create blob with correct MIME type
+                              const blob = new Blob([bytes], { type: mimeType });
+                              const reconstructedFile = new File([blob], fileName, { type: mimeType });
+                              
+                              console.log('✅ [Track Documents] File reconstructed:', {
+                                name: fileName,
+                                size: reconstructedFile.size,
+                                type: reconstructedFile.type
+                              });
+                              
+                              reconstructedFiles.push(reconstructedFile);
+                            } catch (err) {
+                              console.error('❌ [Track Documents] Failed to reconstruct file:', fileName, err);
+                              toast({
+                                title: "File Error",
+                                description: `Failed to load ${fileName}`,
+                                variant: "destructive"
+                              });
+                            }
                           } else if (fileData instanceof File) {
                             reconstructedFiles.push(fileData);
                           }

@@ -248,7 +248,7 @@ export function DocumentUploader({ userRole, onSubmit }: DocumentUploaderProps) 
               <input
                 type="file"
                 multiple
-                accept=".pdf,.doc,.docx,.xlsx,.xls,.png,.jpg,.jpeg"
+                accept=".pdf,.doc,.docx,.xlsx,.xls,.png,.jpg,.jpeg,.gif,.bmp,.webp,.svg"
                 onChange={handleFileUpload}
                 className="hidden"
                 id="file-upload"
@@ -261,7 +261,7 @@ export function DocumentUploader({ userRole, onSubmit }: DocumentUploaderProps) 
                     Drag and drop files here, or click to browse
                   </p>
                   <p className="text-xs text-muted-foreground">
-                    Supports: PDF, DOC, DOCX, XLS, XLSX, PNG, JPG, JPEG
+                    Supports: PDF, DOC, DOCX, XLS, XLSX, PNG, JPG, JPEG, GIF, BMP, WebP, SVG
                   </p>
                 </div>
               </Label>

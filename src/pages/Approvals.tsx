@@ -1,3 +1,4 @@
+import React, { useState, useEffect } from "react";
 import { DashboardLayout } from "@/components/DashboardLayout";
 import { AdvancedDigitalSignature } from "@/components/AdvancedDigitalSignature";
 import { LiveMeetingRequestModal } from "@/components/LiveMeetingRequestModal";
@@ -9,10 +10,10 @@ import { Progress } from "@/components/ui/progress";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { CheckCircle2, XCircle, Clock, FileText, User, Calendar, MessageSquare, Video, Eye, ChevronRight, CircleAlert, Undo2, SquarePen, AlertTriangle, Zap, Share2 } from "lucide-react";
 import { DocumensoIntegration } from "@/components/DocumensoIntegration";
-import { useState, useEffect } from "react";
 import { useToast } from "@/hooks/use-toast";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
+import isJpg from 'is-jpg';
 
 const Approvals = () => {
   const { user, logout } = useAuth();
@@ -52,21 +53,69 @@ const Approvals = () => {
     }
     setSharedComments(savedSharedComments);
     
-    // Listen for document management and bypass approval cards
-    const handleDocumentApprovalCreated = () => {
-      // Force re-render to show new approval cards
-      setComments(prev => ({ ...prev }));
-      // Reload pending approvals
-      const stored = JSON.parse(localStorage.getItem('pending-approvals') || '[]');
-      setPendingApprovals(stored);
+    // Listen for document management approval cards
+    const handleDocumentApprovalCreated = (event: any) => {
+      console.log('🚨 [Approvals] Document approval event received:', event.type);
+      const approval = event.detail?.approval || event.detail?.document || event.detail?.approvalCard;
+      
+      if (approval) {
+        console.log('📋 [Approvals] Approval card received:', {
+          id: approval.id,
+          title: approval.title,
+          isEmergency: approval.isEmergency,
+          recipients: approval.recipients,
+          recipientIds: approval.recipientIds
+        });
+        console.log('👤 [Approvals] Current user:', user?.name, '| Role:', user?.role);
+        
+        // Check if user should see this card
+        const shouldShow = isUserInRecipients(approval);
+        console.log(`🔍 [Approvals] Should show card "${approval.title}" to current user: ${shouldShow}`);
+        
+        // Add to state if not duplicate and user should see it
+        setPendingApprovals(prev => {
+          const isDuplicate = prev.some((existing: any) => existing.id === approval.id);
+          
+          if (!isDuplicate) {
+            console.log('✅ [Approvals] Adding approval card to state');
+            const newState = [approval, ...prev];
+            
+            // Show notification if user should see this card
+            if (shouldShow) {
+              toast({
+                title: "New Approval Required",
+                description: `${approval.title} requires your approval`,
+                duration: 5000,
+              });
+            }
+            
+            return newState;
+          } else {
+            console.log('ℹ️ [Approvals] Approval card already exists, skipping duplicate');
+            return prev;
+          }
+        });
+      } else {
+        // Fallback: reload from localStorage if no event detail
+        console.log('🔄 [Approvals] No event detail, reloading from localStorage');
+        const stored = JSON.parse(localStorage.getItem('pending-approvals') || '[]');
+        console.log('📥 [Approvals] Loaded', stored.length, 'cards from localStorage');
+        setPendingApprovals(stored);
+      }
     };
     
     window.addEventListener('document-approval-created', handleDocumentApprovalCreated);
+    window.addEventListener('approval-card-created', handleDocumentApprovalCreated);
+    window.addEventListener('emergency-document-created', handleDocumentApprovalCreated);
+    window.addEventListener('document-submitted', handleDocumentApprovalCreated);
     
     return () => {
       window.removeEventListener('document-approval-created', handleDocumentApprovalCreated);
+      window.removeEventListener('approval-card-created', handleDocumentApprovalCreated);
+      window.removeEventListener('emergency-document-created', handleDocumentApprovalCreated);
+      window.removeEventListener('document-submitted', handleDocumentApprovalCreated);
     };
-  }, []);
+  }, [user]);
 
   const handleLogout = () => {
     logout();
@@ -282,6 +331,7 @@ const Approvals = () => {
     // Check if document has multiple uploaded files
     if (doc.files && doc.files.length > 0) {
       try {
+        console.log('📄 Reconstructing files for viewing:', doc.files.length, 'files');
         // Reconstruct all files from base64
         const reconstructedFiles: File[] = [];
         
@@ -290,30 +340,189 @@ const Approvals = () => {
           const fileType = file.type || 'application/octet-stream';
           const fileData = file.data || file;
           
+          console.log('🔄 Processing file:', {
+            name: fileName,
+            type: fileType,
+            hasData: !!fileData,
+            dataType: typeof fileData
+          });
+          
           // If file has base64 data, reconstruct File object
           if (typeof fileData === 'string' && fileData.startsWith('data:')) {
-            const response = await fetch(fileData);
-            const blob = await response.blob();
-            const reconstructedFile = new File([blob], fileName, { type: fileType });
-            reconstructedFiles.push(reconstructedFile);
+            try {
+              // Extract base64 data and MIME type from data URL
+              const matches = fileData.match(/^data:([^;]+);base64,(.+)$/);
+              if (!matches) {
+                throw new Error('Invalid data URL format');
+              }
+              
+              const mimeType = matches[1] || fileType;
+              const base64Data = matches[2];
+              
+              console.log('📦 Decoding base64:', {
+                mimeType: mimeType,
+                base64Length: base64Data.length,
+                base64Preview: base64Data.substring(0, 50) + '...',
+                base64IsValid: /^[A-Za-z0-9+/]*={0,2}$/.test(base64Data)
+              });
+              
+              // CRITICAL DEBUG: Check if this is actually a data URL nested in the data
+              if (base64Data.startsWith('data:')) {
+                console.error('🚨 FOUND THE PROBLEM: Base64 data contains another data URL!');
+                console.log('Raw stored data preview:', fileData.substring(0, 200));
+                
+                // The data URL is double-encoded, extract the actual base64
+                const innerMatches = base64Data.match(/^data:([^;]+);base64,(.+)$/);
+                if (innerMatches) {
+                  console.log('✅ Extracting inner base64 data');
+                  const realBase64 = innerMatches[2];
+                  
+                  const binaryString = atob(realBase64);
+                  const bytes = new Uint8Array(binaryString.length);
+                  for (let i = 0; i < binaryString.length; i++) {
+                    bytes[i] = binaryString.charCodeAt(i);
+                  }
+                  
+                  // Validate JPEG
+                  if (mimeType === 'image/jpeg' || mimeType === 'image/jpg') {
+                    const isValidJpg = isJpg(bytes);
+                    if (!isValidJpg) {
+                      console.error('❌ Still invalid after extraction:', {
+                        firstBytes: Array.from(bytes.slice(0, 10)),
+                        lastBytes: Array.from(bytes.slice(-10))
+                      });
+                      throw new Error(`Invalid JPEG file: ${fileName}. Even after extraction, file signature is wrong.`);
+                    }
+                    console.log('✅ JPEG validation passed after extraction!');
+                  }
+                  
+                  const blob = new Blob([bytes], { type: mimeType });
+                  const reconstructedFile = new File([blob], fileName, { type: mimeType });
+                  console.log('✅ File reconstructed from nested data URL:', reconstructedFile.size);
+                  reconstructedFiles.push(reconstructedFile);
+                  continue; // Skip normal processing
+                }
+              }
+              
+              // Convert base64 to binary
+              const binaryString = atob(base64Data);
+              const bytes = new Uint8Array(binaryString.length);
+              for (let i = 0; i < binaryString.length; i++) {
+                bytes[i] = binaryString.charCodeAt(i);
+              }
+              
+              // Validate JPEG files with is-jpg
+              if (mimeType === 'image/jpeg' || mimeType === 'image/jpg' || 
+                  fileName.toLowerCase().endsWith('.jpg') || fileName.toLowerCase().endsWith('.jpeg')) {
+                
+                console.log('🔍 Validating JPEG with is-jpg:', fileName);
+                console.log('📊 Byte analysis:', {
+                  firstBytes: Array.from(bytes.slice(0, 10)),
+                  firstBytesAsText: String.fromCharCode(...bytes.slice(0, 20)),
+                  lastBytes: Array.from(bytes.slice(-10)),
+                  expectedStart: [255, 216], // FF D8
+                  expectedEnd: [255, 217]    // FF D9
+                });
+                
+                const isValidJpg = isJpg(bytes);
+                
+                if (!isValidJpg) {
+                  console.error('❌ Invalid JPEG detected:', {
+                    fileName,
+                    size: bytes.length,
+                    firstBytes: Array.from(bytes.slice(0, 10)),
+                    lastBytes: Array.from(bytes.slice(-10)),
+                    asText: String.fromCharCode(...bytes.slice(0, 50))
+                  });
+                  
+                  // Try to give helpful error message based on what we found
+                  const firstByte = bytes[0];
+                  let errorHint = '';
+                  if (firstByte === 100 && bytes[1] === 97) { // 'd', 'a'
+                    errorHint = ' (Appears to be text starting with "da..." - possibly corrupted base64)';
+                  } else if (firstByte === 60) { // '<'
+                    errorHint = ' (Appears to be HTML/XML content)';
+                  } else if (firstByte === 123) { // '{'
+                    errorHint = ' (Appears to be JSON data)';
+                  }
+                  
+                  throw new Error(`Invalid JPEG file: ${fileName}. The file signature does not match JPEG format${errorHint}.`);
+                }
+                
+                console.log('✅ JPEG validation passed for:', fileName);
+              }
+              
+              // Create blob with correct MIME type
+              const blob = new Blob([bytes], { type: mimeType });
+              const reconstructedFile = new File([blob], fileName, { type: mimeType });
+              
+              // DETAILED DEBUG: Check if blob is valid
+              console.log('✅ File reconstructed:', {
+                name: fileName,
+                size: reconstructedFile.size,
+                type: reconstructedFile.type,
+                blobSize: blob.size,
+                firstBytes: Array.from(bytes.slice(0, 10))
+              });
+              
+              // DETAILED DEBUG: Try creating blob URL to verify
+              const testUrl = URL.createObjectURL(blob);
+              console.log('🔍 Test blob URL created:', testUrl);
+              
+              // DETAILED DEBUG: For images, test if they can load
+              if (mimeType.startsWith('image/')) {
+                const testImg = new Image();
+                testImg.onload = () => {
+                  console.log('✅ Blob test: Image loaded successfully via blob URL', {
+                    width: testImg.width,
+                    height: testImg.height
+                  });
+                  URL.revokeObjectURL(testUrl);
+                };
+                testImg.onerror = (e) => {
+                  console.error('❌ Blob test: Image failed to load via blob URL', e);
+                  URL.revokeObjectURL(testUrl);
+                };
+                testImg.src = testUrl;
+              }
+              
+              reconstructedFiles.push(reconstructedFile);
+            } catch (err) {
+              console.error('❌ Failed to reconstruct file:', fileName, err);
+              toast({
+                title: "File Error",
+                description: `Failed to load ${fileName}: ${err instanceof Error ? err.message : 'Unknown error'}`,
+                variant: "destructive"
+              });
+            }
           } else if (fileData instanceof File) {
             reconstructedFiles.push(fileData);
           }
         }
         
         // Use multi-file viewer if has multiple files
-        if (reconstructedFiles.length > 1) {
+        if (reconstructedFiles.length === 0) {
+          console.warn('⚠️ No files could be reconstructed');
+          toast({
+            title: "No Files",
+            description: "No valid files found to display",
+            variant: "destructive"
+          });
+          return;
+        } else if (reconstructedFiles.length > 1) {
+          console.log('✅ Opening multi-file viewer with', reconstructedFiles.length, 'files');
           setViewingFiles(reconstructedFiles);
           setViewingFile(null);
         } else if (reconstructedFiles.length === 1) {
+          console.log('✅ Opening single file:', reconstructedFiles[0].name);
           setViewingFile(reconstructedFiles[0]);
           setViewingFiles([]);
         }
       } catch (error) {
-        console.error('Error reconstructing files:', error);
+        console.error('❌ Error reconstructing files:', error);
         toast({
           title: "Error",
-          description: "Failed to load files",
+          description: `Failed to load files: ${error instanceof Error ? error.message : 'Unknown error'}`,
           variant: "destructive"
         });
         return;
@@ -530,49 +739,143 @@ const Approvals = () => {
     }
   ];
   
+  // Test function to verify recipient matching
+  const testRecipientMatching = () => {
+    const testCases = [
+      {
+        user: { name: 'Dr. Robert Principal', role: 'principal' },
+        recipientIds: ['principal-dr.-robert-principal', 'registrar-prof.-sarah-registrar'],
+        expected: true
+      },
+      {
+        user: { name: 'Prof. Sarah Registrar', role: 'registrar' },
+        recipientIds: ['principal-dr.-robert-principal', 'registrar-prof.-sarah-registrar'],
+        expected: true
+      },
+      {
+        user: { name: 'Dr. CSE HOD', role: 'hod' },
+        recipientIds: ['hod-dr.-cse-hod-cse', 'principal-dr.-robert-principal'],
+        expected: true
+      },
+      {
+        user: { name: 'Random User', role: 'student' },
+        recipientIds: ['principal-dr.-robert-principal', 'registrar-prof.-sarah-registrar'],
+        expected: false
+      }
+    ];
+    
+    console.log('🧪 Testing recipient matching logic:');
+    testCases.forEach((testCase, index) => {
+      const mockDoc = { recipientIds: testCase.recipientIds };
+      const mockUser = testCase.user;
+      
+      // Temporarily set user for testing
+      const originalUser = user;
+      (window as any).testUser = mockUser;
+      
+      const result = testCase.recipientIds.some((recipientId: string) => {
+        const recipientLower = recipientId.toLowerCase();
+        const userRoleLower = mockUser.role.toLowerCase();
+        
+        const roleMatches = [
+          userRoleLower === 'principal' && recipientLower.includes('principal'),
+          userRoleLower === 'registrar' && recipientLower.includes('registrar'),
+          userRoleLower === 'hod' && recipientLower.includes('hod')
+        ];
+        
+        return roleMatches.some(match => match);
+      });
+      
+      console.log(`  Test ${index + 1}: ${result === testCase.expected ? '✅ PASS' : '❌ FAIL'} - User: ${mockUser.name} (${mockUser.role}) - Recipients: ${testCase.recipientIds.join(', ')} - Expected: ${testCase.expected}, Got: ${result}`);
+    });
+  };
+  
+  // Run test on component mount (only in development)
+  useEffect(() => {
+    if (process.env.NODE_ENV === 'development') {
+      testRecipientMatching();
+    }
+  }, []);
+
   // Helper function to check if current user is in recipients list
   const isUserInRecipients = (doc: any): boolean => {
     // If no recipients specified, show to everyone (for backward compatibility)
-    if (!doc.recipients || doc.recipients.length === 0) {
+    if ((!doc.recipients || doc.recipients.length === 0) && (!doc.recipientIds || doc.recipientIds.length === 0)) {
       console.log('✅ No recipients filter - showing card:', doc.title);
       return true;
     }
     
-    // Check if current user matches any recipient
-    const currentUserName = user?.fullName || user?.name || '';
+    const currentUserName = user?.name || '';
     const currentUserRole = user?.role || '';
     
-    const isMatch = doc.recipients.some((recipient: string) => {
-      // Match by full name
-      if (recipient.toLowerCase() === currentUserName.toLowerCase()) {
-        return true;
-      }
+    console.log(`🔍 Checking card "${doc.title}" for user: ${currentUserName} (${currentUserRole})`);
+    
+    // Use recipientIds if available (from Document Management), otherwise use recipients
+    const recipientsToCheck = doc.recipientIds || doc.recipients || [];
+    console.log('📋 Recipients to check:', recipientsToCheck);
+    
+    const isMatch = recipientsToCheck.some((recipient: string) => {
+      const recipientLower = recipient.toLowerCase();
+      const userNameLower = currentUserName.toLowerCase();
+      const userRoleLower = currentUserRole.toLowerCase();
       
-      // Match by role (e.g., "Principal", "Registrar", "HOD")
-      if (recipient.toLowerCase() === currentUserRole.toLowerCase()) {
-        return true;
-      }
-      
-      // Match by role with department (e.g., "HOD - Computer Science")
-      if (recipient.toLowerCase().includes(currentUserRole.toLowerCase())) {
-        return true;
-      }
-      
-      // Match if recipient contains user's name
-      if (currentUserName && recipient.toLowerCase().includes(currentUserName.toLowerCase())) {
-        return true;
+      // If checking recipient IDs (from Document Management)
+      if (doc.recipientIds) {
+        // Match by role in recipient ID
+        const roleMatches = [
+          userRoleLower === 'principal' && recipientLower.includes('principal'),
+          userRoleLower === 'registrar' && recipientLower.includes('registrar'),
+          userRoleLower === 'dean' && recipientLower.includes('dean'),
+          userRoleLower === 'hod' && recipientLower.includes('hod'),
+          userRoleLower === 'program-head' && recipientLower.includes('program-department-head'),
+          userRoleLower === 'controller' && recipientLower.includes('controller'),
+          userRoleLower === 'cdc' && recipientLower.includes('cdc'),
+          // Department matching for faculty/students
+          user?.department && recipientLower.includes(user.department.toLowerCase()),
+          user?.branch && recipientLower.includes(user.branch.toLowerCase())
+        ];
+        
+        if (roleMatches.some(match => match)) {
+          console.log(`✅ Role ID match: ${recipient} matches role ${currentUserRole}`);
+          return true;
+        }
+      } else {
+        // If checking display names (legacy cards)
+        // Direct name match
+        if (recipientLower.includes(userNameLower) && userNameLower.length > 2) {
+          console.log(`✅ Name match: ${recipient} contains ${currentUserName}`);
+          return true;
+        }
+        
+        // Role-based matching with display names
+        const roleMatches = [
+          userRoleLower === 'principal' && (recipientLower.includes('principal') || recipientLower.includes('dr. robert')),
+          userRoleLower === 'registrar' && (recipientLower.includes('registrar') || recipientLower.includes('prof. sarah')),
+          userRoleLower === 'dean' && (recipientLower.includes('dean') || recipientLower.includes('dr. maria')),
+          userRoleLower === 'hod' && (recipientLower.includes('hod') || recipientLower.includes('head of department')),
+          userRoleLower === 'program-head' && (recipientLower.includes('program') && recipientLower.includes('head')),
+          userRoleLower === 'controller' && recipientLower.includes('controller'),
+          userRoleLower === 'cdc' && recipientLower.includes('cdc'),
+          recipientLower.includes(userRoleLower)
+        ];
+        
+        if (roleMatches.some(match => match)) {
+          console.log(`✅ Role match: ${recipient} matches role ${currentUserRole}`);
+          return true;
+        }
       }
       
       return false;
     });
     
-    console.log(`🔍 Card "${doc.title}" - User: ${currentUserName}/${currentUserRole} - Recipients:`, doc.recipients, '- Match:', isMatch);
+    console.log(`${isMatch ? '✅' : '❌'} Final result for "${doc.title}": ${isMatch ? 'SHOW' : 'HIDE'}`);
     return isMatch;
   };
 
   useEffect(() => {
     const loadPendingApprovals = () => {
       const stored = JSON.parse(localStorage.getItem('pending-approvals') || '[]');
+      console.log('📥 Loading pending approvals from localStorage:', stored.length, 'cards');
       setPendingApprovals(stored);
     };
     
@@ -604,21 +907,37 @@ const Approvals = () => {
     loadApprovalHistory();
     saveApprovalData();
     
-    const handleStorageChange = () => loadPendingApprovals();
+    const handleStorageChange = () => {
+      console.log('🔄 Storage changed, reloading approvals');
+      loadPendingApprovals();
+    };
     
     // Listen for document removal from Track Documents
     const handleDocumentRemoval = (event: any) => {
       const { docId } = event.detail;
+      console.log('🗑️ Document removed:', docId);
       setPendingApprovals(prev => prev.filter(doc => doc.id !== docId));
     };
 
     // Listen for new approval cards from Emergency Management
     const handleApprovalCardCreated = (event: any) => {
       const { approval } = event.detail;
-      console.log('📋 New approval card received:', approval);
+      console.log('📋 New approval card received in Approvals page:', approval);
       console.log('👤 Current user:', user?.name, '| Role:', user?.role);
       console.log('👥 Card recipients:', approval.recipients);
-      setPendingApprovals(prev => [approval, ...prev]);
+      
+      // Check if card already exists
+      setPendingApprovals(prev => {
+        const isDuplicate = prev.some((existing: any) => existing.id === approval.id);
+        
+        if (!isDuplicate) {
+          console.log('✅ Adding new approval card to state');
+          return [approval, ...prev];
+        } else {
+          console.log('ℹ️ Approval card already exists, skipping duplicate');
+          return prev;
+        }
+      });
     };
     
     window.addEventListener('storage', handleStorageChange);
@@ -781,7 +1100,16 @@ const Approvals = () => {
               <CardContent>
                 <div className="space-y-4">
                   {/* Dynamic Submitted Documents */}
-                  {pendingApprovals.filter(doc => isUserInRecipients(doc)).map((doc) => (
+                  {pendingApprovals.filter(doc => {
+                    const shouldShow = isUserInRecipients(doc);
+                    console.log(`📄 Document Management card "${doc.title}" - Should show: ${shouldShow}`);
+                    if (doc.recipientIds) {
+                      console.log('  🆔 Using recipient IDs for filtering:', doc.recipientIds);
+                    } else {
+                      console.log('  🆔 Using display names for filtering:', doc.recipients);
+                    }
+                    return shouldShow;
+                  }).map((doc) => (
                     <Card key={doc.id} className={`hover:shadow-md transition-shadow ${doc.isEmergency ? 'border-destructive bg-red-50 animate-pulse' : ''}`}>
                       <CardContent className="p-6">
                         <div className="flex flex-col lg:flex-row gap-6">

@@ -74,27 +74,57 @@ export const DocumentsWidget: React.FC<DocumentsWidgetProps> = ({
     }
     
     // Check if current user matches any recipient
-    const currentUserName = user?.fullName || user?.name || '';
+    const currentUserName = user?.name || '';
     const currentUserRole = user?.role || '';
     
+    // Normalize role for matching (e.g., 'principal' -> 'Principal')
+    const normalizedRole = currentUserRole.charAt(0).toUpperCase() + currentUserRole.slice(1).toLowerCase();
+    
+    // Common role variations for better matching
+    const roleVariations = [
+      currentUserRole.toLowerCase(),
+      normalizedRole,
+      currentUserRole.toUpperCase()
+    ];
+    
+    // Add specific role mappings
+    if (currentUserRole.toLowerCase() === 'principal') {
+      roleVariations.push('Dr. Principal', 'Principal', 'Dr. Robert Principal');
+    } else if (currentUserRole.toLowerCase() === 'registrar') {
+      roleVariations.push('Prof. Registrar', 'Registrar', 'Prof. Sarah Registrar');
+    } else if (currentUserRole.toLowerCase() === 'hod') {
+      roleVariations.push('HOD', 'Dr. HOD', 'Head of Department');
+    } else if (currentUserRole.toLowerCase() === 'program-head') {
+      roleVariations.push('Program Head', 'Program Department Head', 'Prof. Head');
+    }
+    
     return doc.recipients.some((recipient: string) => {
-      // Match by full name
-      if (recipient.toLowerCase() === currentUserName.toLowerCase()) {
+      const recipientLower = recipient.toLowerCase();
+      
+      // Match by full name (exact match)
+      if (recipientLower === currentUserName.toLowerCase()) {
         return true;
       }
       
-      // Match by role (e.g., "Principal", "Registrar", "HOD")
-      if (recipient.toLowerCase() === currentUserRole.toLowerCase()) {
+      // Match by any role variation
+      if (roleVariations.some(variation => recipientLower.includes(variation.toLowerCase()))) {
         return true;
       }
       
-      // Match by role with department (e.g., "HOD - Computer Science")
-      if (recipient.toLowerCase().includes(currentUserRole.toLowerCase())) {
+      // Match if recipient contains user's name parts
+      if (currentUserName) {
+        const nameParts = currentUserName.toLowerCase().split(' ');
+        if (nameParts.some(part => part.length > 2 && recipientLower.includes(part))) {
+          return true;
+        }
+      }
+      
+      // Match by department/branch if applicable
+      if (user?.department && recipientLower.includes(user.department.toLowerCase())) {
         return true;
       }
       
-      // Match if recipient contains user's name
-      if (currentUserName && recipient.toLowerCase().includes(currentUserName.toLowerCase())) {
+      if (user?.branch && recipientLower.includes(user.branch.toLowerCase())) {
         return true;
       }
       

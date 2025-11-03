@@ -27,7 +27,7 @@ const Documents = () => {
     
     // Load user profile from Personal Information
     const userProfile = JSON.parse(localStorage.getItem('user-profile') || '{}');
-    const currentUserName = userProfile.name || user?.fullName || user?.name || 'User';
+    const currentUserName = userProfile.name || user?.name || 'User';
     const currentUserDept = userProfile.department || user?.department || 'Department';
     const currentUserDesignation = userProfile.designation || user?.role || 'Employee';
     
@@ -57,19 +57,84 @@ const Documents = () => {
     
     // Map recipient IDs to names for workflow steps
     const getRecipientName = (recipientId: string) => {
+      // Map of common recipient IDs to their display names
       const recipientMap: { [key: string]: string } = {
-        'principal-dr-robert-principal': 'Dr. Robert Smith',
-        'registrar-prof-sarah-registrar': 'Prof. Sarah Registrar',
-        'hod-dr-cse-hod-cse': 'Dr. Michael Chen',
-        'hod-dr-eee-hod-eee': 'Dr. Mohammed Ali',
-        'hod-dr-mech-hod-mech': 'Dr. MECH HOD',
-        'hod-dr-ece-hod-ece': 'Dr. ECE HOD',
-        'program-department-head-prof-cse-head-cse': 'Prof. CSE Head',
-        'program-department-head-prof-eee-head-eee': 'Prof. EEE Head',
-        'dean-dr-maria-dean': 'Dr. Maria Garcia',
-        'controller-of-examinations-dr-robert-controller': 'Dr. Robert Controller'
+        // Leadership
+        'principal-dr.-robert-principal': 'Dr. Robert Principal',
+        'registrar-prof.-sarah-registrar': 'Prof. Sarah Registrar',
+        'dean-dr.-maria-dean': 'Dr. Maria Dean',
+        'chairman-mr.-david-chairman': 'Mr. David Chairman',
+        'director-(for-information)-ms.-lisa-director': 'Ms. Lisa Director',
+        'leadership-prof.-leadership-officer': 'Prof. Leadership Officer',
+        
+        // CDC Employees
+        'cdc-head-dr.-cdc-head': 'Dr. CDC Head',
+        'cdc-coordinator-prof.-cdc-coordinator': 'Prof. CDC Coordinator',
+        'cdc-executive-ms.-cdc-executive': 'Ms. CDC Executive',
+        
+        // Administrative
+        'controller-of-examinations-dr.-robert-controller': 'Dr. Robert Controller',
+        'asst.-dean-iiic-prof.-asst-dean': 'Prof. Asst Dean',
+        'head-operations-mr.-michael-operations': 'Mr. Michael Operations',
+        'librarian-ms.-jennifer-librarian': 'Ms. Jennifer Librarian',
+        'ssg-prof.-william-ssg': 'Prof. William SSG',
+        
+        // HODs
+        'hod-dr.-eee-hod-eee': 'Dr. EEE HOD',
+        'hod-dr.-mech-hod-mech': 'Dr. MECH HOD',
+        'hod-dr.-cse-hod-cse': 'Dr. CSE HOD',
+        'hod-dr.-ece-hod-ece': 'Dr. ECE HOD',
+        'hod-dr.-csm-hod-csm': 'Dr. CSM HOD',
+        'hod-dr.-cso-hod-cso': 'Dr. CSO HOD',
+        'hod-dr.-csd-hod-csd': 'Dr. CSD HOD',
+        'hod-dr.-csc-hod-csc': 'Dr. CSC HOD',
+        
+        // Program Department Heads
+        'program-department-head-prof.-eee-head-eee': 'Prof. EEE Head',
+        'program-department-head-prof.-mech-head-mech': 'Prof. MECH Head',
+        'program-department-head-prof.-cse-head-cse': 'Prof. CSE Head',
+        'program-department-head-prof.-ece-head-ece': 'Prof. ECE Head',
+        'program-department-head-prof.-csm-head-csm': 'Prof. CSM Head',
+        'program-department-head-prof.-cso-head-cso': 'Prof. CSO Head',
+        'program-department-head-prof.-csd-head-csd': 'Prof. CSD Head',
+        'program-department-head-prof.-csc-head-csc': 'Prof. CSC Head'
       };
-      return recipientMap[recipientId] || recipientId.replace(/-/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+      
+      // If we have a mapping, use it
+      if (recipientMap[recipientId]) {
+        return recipientMap[recipientId];
+      }
+      
+      // Otherwise, try to extract the name from the ID
+      // IDs are typically formatted like: 'role-name-branch-year'
+      // e.g., 'faculty-dr.-cse-faculty-cse-1st'
+      const parts = recipientId.split('-');
+      
+      // Try to find name pattern (usually contains Dr., Prof., Mr., Ms., etc.)
+      let name = '';
+      for (let i = 0; i < parts.length; i++) {
+        if (parts[i].match(/^(dr\.|prof\.|mr\.|ms\.|dr|prof|mr|ms)$/i)) {
+          // Found a title, collect the name parts
+          const titleIndex = i;
+          name = parts.slice(titleIndex).join(' ');
+          // Clean up and capitalize
+          name = name.replace(/-/g, ' ')
+                    .split(' ')
+                    .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+                    .join(' ');
+          break;
+        }
+      }
+      
+      // If we couldn't extract a proper name, use the whole ID cleaned up
+      if (!name) {
+        name = recipientId.replace(/-/g, ' ')
+                      .split(' ')
+                      .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+                      .join(' ');
+      }
+      
+      return name;
     };
     
     // Create workflow steps based on selected recipients
@@ -91,7 +156,7 @@ const Documents = () => {
         name: stepName,
         status: index === 0 ? 'current' : 'pending',
         assignee: recipientName,
-        recipientId: recipientId
+        completedDate: ''
       });
     });
     
@@ -128,6 +193,16 @@ const Documents = () => {
     localStorage.setItem('submitted-documents', JSON.stringify(existingCards));
     
     // Create approval card for Approval Center
+    console.log('📄 Creating Document Management Approval Card');
+    console.log('  📋 Selected recipient IDs:', data.recipients);
+    
+    // Convert recipient IDs to names for display, but keep original IDs for matching
+    const recipientNames = data.recipients.map((id: string) => {
+      const name = getRecipientName(id);
+      console.log(`  🔄 Converting: ${id} → ${name}`);
+      return name;
+    });
+    
     const approvalCard = {
       id: trackingCard.id,
       title: data.title,
@@ -137,17 +212,59 @@ const Documents = () => {
       status: 'pending',
       priority: data.priority,
       description: data.description,
-      recipients: data.recipients.map((id: string) => getRecipientName(id)),
+      recipients: recipientNames, // Display names for UI
+      recipientIds: data.recipients, // Original IDs for matching
       files: serializedFiles
     };
+
+    console.log('✅ Approval card created:', {
+      id: approvalCard.id,
+      title: approvalCard.title,
+      recipients: approvalCard.recipients,
+      recipientIds: approvalCard.recipientIds,
+      recipientCount: approvalCard.recipients.length
+    });
     
     // Save to localStorage for approvals
     const existingApprovals = JSON.parse(localStorage.getItem('pending-approvals') || '[]');
     existingApprovals.unshift(approvalCard);
     localStorage.setItem('pending-approvals', JSON.stringify(existingApprovals));
     
-    // Dispatch event for real-time updates
-    window.dispatchEvent(new CustomEvent('document-approval-created'));
+    console.log('✅ Approval card saved to localStorage. Total cards:', existingApprovals.length);
+    
+    // Dispatch events for real-time updates
+    console.log('📢 Dispatching document-approval-created event for tracking');
+    window.dispatchEvent(new CustomEvent('document-approval-created', {
+      detail: { document: trackingCard }
+    }));
+    
+    console.log('📢 Dispatching approval-card-created event for approvals');
+    window.dispatchEvent(new CustomEvent('approval-card-created', {
+      detail: { approval: approvalCard }
+    }));
+    
+    // Additional event for immediate UI updates
+    window.dispatchEvent(new CustomEvent('document-submitted', {
+      detail: { trackingCard, approvalCard }
+    }));
+    
+    // Force storage event for cross-tab updates
+    window.dispatchEvent(new StorageEvent('storage', {
+      key: 'submitted-documents',
+      newValue: JSON.stringify(existingCards)
+    }));
+    
+    window.dispatchEvent(new StorageEvent('storage', {
+      key: 'pending-approvals', 
+      newValue: JSON.stringify(existingApprovals)
+    }));
+    
+    console.log('✅ Document Management submission complete:', {
+      trackingCardId: trackingCard.id,
+      approvalCardId: approvalCard.id,
+      recipientCount: data.recipients.length,
+      eventsDispatched: ['document-approval-created', 'approval-card-created', 'document-submitted']
+    });
     
     // Create channel for document collaboration
     const channelName = `${data.title.substring(0, 30)}${data.title.length > 30 ? '...' : ''}`;

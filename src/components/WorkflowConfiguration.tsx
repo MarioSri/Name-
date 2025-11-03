@@ -216,15 +216,70 @@ export const WorkflowConfiguration: React.FC<WorkflowConfigurationProps> = ({ cl
       // Convert files to base64 for localStorage storage
       const convertFilesToBase64 = async (files: File[]) => {
         const filePromises = files.map(file => {
-          return new Promise((resolve) => {
+          return new Promise(async (resolve, reject) => {
+            console.log('📤 [UPLOAD] Converting file to base64:', {
+              name: file.name,
+              size: file.size,
+              type: file.type
+            });
+            
+            // Validate JPEG files BEFORE encoding
+            if (file.type === 'image/jpeg' || file.type === 'image/jpg' || 
+                file.name.toLowerCase().endsWith('.jpg') || file.name.toLowerCase().endsWith('.jpeg')) {
+              
+              try {
+                const arrayBuffer = await file.arrayBuffer();
+                const uint8Array = new Uint8Array(arrayBuffer);
+                
+                console.log('🔍 [UPLOAD] Validating JPEG before encoding:', {
+                  fileName: file.name,
+                  fileSize: file.size,
+                  firstBytes: Array.from(uint8Array.slice(0, 10)),
+                  lastBytes: Array.from(uint8Array.slice(-10))
+                });
+                
+                // Import is-jpg dynamically
+                const isJpg = (await import('is-jpg')).default;
+                const isValidJpg = isJpg(uint8Array);
+                
+                if (!isValidJpg) {
+                  console.error('❌ [UPLOAD] Invalid JPEG uploaded:', {
+                    fileName: file.name,
+                    firstBytes: Array.from(uint8Array.slice(0, 10)),
+                    expectedStart: [255, 216] // FF D8
+                  });
+                  
+                  reject(new Error(`Cannot upload invalid JPEG file: ${file.name}`));
+                  return;
+                }
+                
+                console.log('✅ [UPLOAD] JPEG validation passed');
+              } catch (err) {
+                console.error('❌ [UPLOAD] JPEG validation error:', err);
+                reject(err);
+                return;
+              }
+            }
+            
             const reader = new FileReader();
             reader.onloadend = () => {
+              const dataUrl = reader.result as string;
+              console.log('✅ [UPLOAD] File converted to base64:', {
+                name: file.name,
+                dataUrlLength: dataUrl.length,
+                dataUrlPreview: dataUrl.substring(0, 50) + '...'
+              });
+              
               resolve({
                 name: file.name,
                 size: file.size,
                 type: file.type,
-                data: reader.result // base64 data URL
+                data: dataUrl // base64 data URL
               });
+            };
+            reader.onerror = (error) => {
+              console.error('❌ [UPLOAD] FileReader error:', error);
+              reject(error);
             };
             reader.readAsDataURL(file);
           });
@@ -265,28 +320,116 @@ export const WorkflowConfiguration: React.FC<WorkflowConfigurationProps> = ({ cl
         comments: []
       };
       
-      // Save to localStorage for tracking
-      const existingCards = JSON.parse(localStorage.getItem('submitted-documents') || '[]');
-      existingCards.unshift(trackingCard);
-      localStorage.setItem('submitted-documents', JSON.stringify(existingCards));
+      // Save to localStorage for tracking with quota management
+      try {
+        const existingCards = JSON.parse(localStorage.getItem('submitted-documents') || '[]');
+        existingCards.unshift(trackingCard);
+        
+        // Keep only the last 50 documents to prevent quota issues
+        const limitedCards = existingCards.slice(0, 50);
+        
+        // Try to save
+        try {
+          localStorage.setItem('submitted-documents', JSON.stringify(limitedCards));
+        } catch (quotaError) {
+          // If still quota exceeded, remove file data from older documents
+          console.warn('⚠️ Quota exceeded, removing file data from older documents');
+          const cardsWithoutOldFiles = limitedCards.map((card: any, index: number) => {
+            if (index > 10) { // Keep files only for newest 10 documents
+              return { ...card, files: [] };
+            }
+            return card;
+          });
+          localStorage.setItem('submitted-documents', JSON.stringify(cardsWithoutOldFiles));
+        }
+      } catch (error) {
+        console.error('❌ Failed to save to submitted-documents:', error);
+        toast({
+          title: "Storage Warning",
+          description: "Document saved but file storage is limited due to space constraints.",
+          variant: "default"
+        });
+      }
       
       // Create approval card for Approval Center following "Budget Request – Lab Equipment" layout
       if (selectedRecipients.length > 0) {
-        // Map recipient IDs to names
+        // Map recipient IDs to names using the same format as other components
         const getRecipientName = (recipientId: string) => {
           const recipientMap: { [key: string]: string } = {
-            'principal-dr-robert-principal': 'Dr. Robert Smith',
-            'registrar-prof-sarah-registrar': 'Prof. Sarah Registrar',
-            'hod-dr-cse-hod-cse': 'Dr. Michael Chen',
-            'hod-dr-eee-hod-eee': 'Dr. Mohammed Ali',
-            'hod-dr-mech-hod-mech': 'Dr. MECH HOD',
-            'hod-dr-ece-hod-ece': 'Dr. ECE HOD',
-            'program-department-head-prof-cse-head-cse': 'Prof. CSE Head',
-            'program-department-head-prof-eee-head-eee': 'Prof. EEE Head',
-            'dean-dr-maria-dean': 'Dr. Maria Garcia',
-            'controller-of-examinations-dr-robert-controller': 'Dr. Robert Controller'
+            // Leadership
+            'principal-dr.-robert-principal': 'Dr. Robert Principal',
+            'registrar-prof.-sarah-registrar': 'Prof. Sarah Registrar',
+            'dean-dr.-maria-dean': 'Dr. Maria Dean',
+            'chairman-mr.-david-chairman': 'Mr. David Chairman',
+            'director-(for-information)-ms.-lisa-director': 'Ms. Lisa Director',
+            'leadership-prof.-leadership-officer': 'Prof. Leadership Officer',
+            
+            // CDC Employees
+            'cdc-head-dr.-cdc-head': 'Dr. CDC Head',
+            'cdc-coordinator-prof.-cdc-coordinator': 'Prof. CDC Coordinator',
+            'cdc-executive-ms.-cdc-executive': 'Ms. CDC Executive',
+            
+            // Administrative
+            'controller-of-examinations-dr.-robert-controller': 'Dr. Robert Controller',
+            'asst.-dean-iiic-prof.-asst-dean': 'Prof. Asst Dean',
+            'head-operations-mr.-michael-operations': 'Mr. Michael Operations',
+            'librarian-ms.-jennifer-librarian': 'Ms. Jennifer Librarian',
+            'ssg-prof.-william-ssg': 'Prof. William SSG',
+            
+            // HODs
+            'hod-dr.-eee-hod-eee': 'Dr. EEE HOD',
+            'hod-dr.-mech-hod-mech': 'Dr. MECH HOD',
+            'hod-dr.-cse-hod-cse': 'Dr. CSE HOD',
+            'hod-dr.-ece-hod-ece': 'Dr. ECE HOD',
+            'hod-dr.-csm-hod-csm': 'Dr. CSM HOD',
+            'hod-dr.-cso-hod-cso': 'Dr. CSO HOD',
+            'hod-dr.-csd-hod-csd': 'Dr. CSD HOD',
+            'hod-dr.-csc-hod-csc': 'Dr. CSC HOD',
+            
+            // Program Department Heads
+            'program-department-head-prof.-eee-head-eee': 'Prof. EEE Head',
+            'program-department-head-prof.-mech-head-mech': 'Prof. MECH Head',
+            'program-department-head-prof.-cse-head-cse': 'Prof. CSE Head',
+            'program-department-head-prof.-ece-head-ece': 'Prof. ECE Head',
+            'program-department-head-prof.-csm-head-csm': 'Prof. CSM Head',
+            'program-department-head-prof.-cso-head-cso': 'Prof. CSO Head',
+            'program-department-head-prof.-csd-head-csd': 'Prof. CSD Head',
+            'program-department-head-prof.-csc-head-csc': 'Prof. CSC Head'
           };
-          return recipientMap[recipientId] || recipientId.replace(/-/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+          
+          // If we have a mapping, use it
+          if (recipientMap[recipientId]) {
+            return recipientMap[recipientId];
+          }
+          
+          // Otherwise, try to extract the name from the ID
+          const parts = recipientId.split('-');
+          
+          // Try to find name pattern (usually contains Dr., Prof., Mr., Ms., etc.)
+          let name = '';
+          for (let i = 0; i < parts.length; i++) {
+            if (parts[i].match(/^(dr\.|prof\.|mr\.|ms\.|dr|prof|mr|ms)$/i)) {
+              // Found a title, collect the name parts
+              const titleIndex = i;
+              name = parts.slice(titleIndex).join(' ');
+              // Clean up and capitalize
+              name = name.replace(/-/g, ' ')
+                        .split(' ')
+                        .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+                        .join(' ');
+              break;
+            }
+          }
+          
+          // If we couldn't extract a proper name, use the whole ID cleaned up
+          if (!name) {
+            name = recipientId.replace(/-/g, ' ')
+                             .split(' ')
+                             .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+                             .join(' ');
+          }
+          
+          return name;
         };
         
         const approvalCard = {
@@ -298,17 +441,55 @@ export const WorkflowConfiguration: React.FC<WorkflowConfigurationProps> = ({ cl
           status: 'pending',
           priority: documentPriority,
           description: documentDescription,
-          recipients: selectedRecipients.map((id: string) => getRecipientName(id)),
+          recipients: selectedRecipients.map((id: string) => getRecipientName(id)), // Display names for UI
+          recipientIds: selectedRecipients, // Original IDs for matching
           files: serializedFiles
         };
         
-        // Save to localStorage for approvals
-        const existingApprovals = JSON.parse(localStorage.getItem('pending-approvals') || '[]');
-        existingApprovals.unshift(approvalCard);
-        localStorage.setItem('pending-approvals', JSON.stringify(existingApprovals));
+        // Save to localStorage for approvals with quota management
+        try {
+          const existingApprovals = JSON.parse(localStorage.getItem('pending-approvals') || '[]');
+          existingApprovals.unshift(approvalCard);
+          
+          // Keep only the last 50 approvals to prevent quota issues
+          const limitedApprovals = existingApprovals.slice(0, 50);
+          
+          // Try to save
+          try {
+            localStorage.setItem('pending-approvals', JSON.stringify(limitedApprovals));
+          } catch (quotaError) {
+            // If still quota exceeded, remove file data from older approvals
+            console.warn('⚠️ Quota exceeded, removing file data from older approvals');
+            const approvalsWithoutOldFiles = limitedApprovals.map((approval: any, index: number) => {
+              if (index > 10) { // Keep files only for newest 10 approvals
+                return { ...approval, files: [] };
+              }
+              return approval;
+            });
+            localStorage.setItem('pending-approvals', JSON.stringify(approvalsWithoutOldFiles));
+          }
+        } catch (error) {
+          console.error('❌ Failed to save to pending-approvals:', error);
+          toast({
+            title: "Storage Warning",
+            description: "Approval created but file storage is limited due to space constraints.",
+            variant: "default"
+          });
+        }
+        
+        console.log('🔄 Creating Approval Chain Bypass approval card:', {
+          id: approvalCard.id,
+          title: approvalCard.title,
+          recipients: approvalCard.recipients,
+          recipientIds: approvalCard.recipientIds,
+          recipientCount: approvalCard.recipients.length
+        });
         
         // Dispatch event for real-time updates
-        window.dispatchEvent(new CustomEvent('document-approval-created'));
+        console.log('📢 Dispatching document-approval-created event for bypass');
+        window.dispatchEvent(new CustomEvent('document-approval-created', {
+          detail: { approval: approvalCard }
+        }));
       }
       
       toast({

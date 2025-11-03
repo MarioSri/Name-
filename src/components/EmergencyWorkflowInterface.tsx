@@ -74,6 +74,88 @@ interface EmergencyWorkflowInterfaceProps {
   userRole: string;
 }
 
+// Helper function to convert recipient IDs to names
+const getRecipientName = (recipientId: string) => {
+  // Map of common recipient IDs to their display names
+  const recipientMap: { [key: string]: string } = {
+    // Leadership
+    'principal-dr.-robert-principal': 'Dr. Robert Principal',
+    'registrar-prof.-sarah-registrar': 'Prof. Sarah Registrar',
+    'dean-dr.-maria-dean': 'Dr. Maria Dean',
+    'chairman-mr.-david-chairman': 'Mr. David Chairman',
+    'director-(for-information)-ms.-lisa-director': 'Ms. Lisa Director',
+    'leadership-prof.-leadership-officer': 'Prof. Leadership Officer',
+    
+    // CDC Employees
+    'cdc-head-dr.-cdc-head': 'Dr. CDC Head',
+    'cdc-coordinator-prof.-cdc-coordinator': 'Prof. CDC Coordinator',
+    'cdc-executive-ms.-cdc-executive': 'Ms. CDC Executive',
+    
+    // Administrative
+    'controller-of-examinations-dr.-robert-controller': 'Dr. Robert Controller',
+    'asst.-dean-iiic-prof.-asst-dean': 'Prof. Asst Dean',
+    'head-operations-mr.-michael-operations': 'Mr. Michael Operations',
+    'librarian-ms.-jennifer-librarian': 'Ms. Jennifer Librarian',
+    'ssg-prof.-william-ssg': 'Prof. William SSG',
+    
+    // HODs
+    'hod-dr.-eee-hod-eee': 'Dr. EEE HOD',
+    'hod-dr.-mech-hod-mech': 'Dr. MECH HOD',
+    'hod-dr.-cse-hod-cse': 'Dr. CSE HOD',
+    'hod-dr.-ece-hod-ece': 'Dr. ECE HOD',
+    'hod-dr.-csm-hod-csm': 'Dr. CSM HOD',
+    'hod-dr.-cso-hod-cso': 'Dr. CSO HOD',
+    'hod-dr.-csd-hod-csd': 'Dr. CSD HOD',
+    'hod-dr.-csc-hod-csc': 'Dr. CSC HOD',
+    
+    // Program Department Heads
+    'program-department-head-prof.-eee-head-eee': 'Prof. EEE Head',
+    'program-department-head-prof.-mech-head-mech': 'Prof. MECH Head',
+    'program-department-head-prof.-cse-head-cse': 'Prof. CSE Head',
+    'program-department-head-prof.-ece-head-ece': 'Prof. ECE Head',
+    'program-department-head-prof.-csm-head-csm': 'Prof. CSM Head',
+    'program-department-head-prof.-cso-head-cso': 'Prof. CSO Head',
+    'program-department-head-prof.-csd-head-csd': 'Prof. CSD Head',
+    'program-department-head-prof.-csc-head-csc': 'Prof. CSC Head'
+  };
+  
+  // If we have a mapping, use it
+  if (recipientMap[recipientId]) {
+    return recipientMap[recipientId];
+  }
+  
+  // Otherwise, try to extract the name from the ID
+  // IDs are typically formatted like: 'role-name-branch-year'
+  // e.g., 'faculty-dr.-cse-faculty-cse-1st'
+  const parts = recipientId.split('-');
+  
+  // Try to find name pattern (usually contains Dr., Prof., Mr., Ms., etc.)
+  let name = '';
+  for (let i = 0; i < parts.length; i++) {
+    if (parts[i].match(/^(dr\.|prof\.|mr\.|ms\.|dr|prof|mr|ms)$/i)) {
+      // Found a title, collect the name parts
+      const titleIndex = i;
+      name = parts.slice(titleIndex).join(' ');
+      // Clean up and capitalize
+      name = name.replace(/-/g, ' ')
+                .split(' ')
+                .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+                .join(' ');
+      break;
+    }
+  }
+  
+  // If we couldn't extract a proper name, use the whole ID cleaned up
+  if (!name) {
+    name = recipientId.replace(/-/g, ' ')
+                     .split(' ')
+                     .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+                     .join(' ');
+  }
+  
+  return name;
+};
+
 export const EmergencyWorkflowInterface: React.FC<EmergencyWorkflowInterfaceProps> = ({ userRole }) => {
   const { user } = useAuth();
   const [isEmergencyMode, setIsEmergencyMode] = useState(false);
@@ -108,7 +190,7 @@ export const EmergencyWorkflowInterface: React.FC<EmergencyWorkflowInterfaceProp
     whatsappNotifications: false,
     whatsappInterval: '1',
     whatsappUnit: 'hours' as 'seconds' | 'minutes' | 'hours' | 'days' | 'weeks' | 'months',
-    notificationLogic: 'document' as 'document' | 'recipient'
+    notificationLogic: 'document-based' as 'document-based' | 'recipient-based'
   });
   const [recipientNotifications, setRecipientNotifications] = useState<{[key: string]: typeof notificationSettings}>({});
   const [openRecipients, setOpenRecipients] = useState<{[key: string]: boolean}>({});
@@ -257,7 +339,7 @@ export const EmergencyWorkflowInterface: React.FC<EmergencyWorkflowInterfaceProp
       title: emergencyDoc.title,
       type: emergencyData.documentTypes.includes('circular') ? 'Circular' : 
             emergencyData.documentTypes.includes('report') ? 'Report' : 'Letter',
-      submittedBy: user?.fullName || user?.name || userRole,
+      submittedBy: user?.name || userRole,
       submittedByDesignation: userRole,
       submittedDate: new Date().toISOString().split('T')[0],
       status: 'submitted',
@@ -270,7 +352,7 @@ export const EmergencyWorkflowInterface: React.FC<EmergencyWorkflowInterfaceProp
           { 
             name: 'Submission', 
             status: 'completed', 
-            assignee: user?.fullName || user?.name || userRole, 
+            assignee: user?.name || userRole, 
             completedDate: new Date().toISOString().split('T')[0] 
           },
           ...recipientsToSend.map((recipient, index) => ({
@@ -281,7 +363,7 @@ export const EmergencyWorkflowInterface: React.FC<EmergencyWorkflowInterfaceProp
         ]
       },
       requiresSignature: true,
-      signedBy: [user?.fullName || user?.name || userRole],
+      signedBy: [user?.name || userRole],
       description: emergencyDoc.description,
       recipients: recipientsToSend,
       files: serializedFiles, // Store base64 serialized files
@@ -296,23 +378,53 @@ export const EmergencyWorkflowInterface: React.FC<EmergencyWorkflowInterfaceProp
       comments: []
     };
 
-    // Save to submitted documents for Track Documents page
-    const existingDocs = JSON.parse(localStorage.getItem('submitted-documents') || '[]');
-    existingDocs.unshift(emergencyCard);
-    localStorage.setItem('submitted-documents', JSON.stringify(existingDocs));
+    // Save to submitted documents for Track Documents page with quota management
+    try {
+      const existingDocs = JSON.parse(localStorage.getItem('submitted-documents') || '[]');
+      existingDocs.unshift(emergencyCard);
+      
+      // Keep only the last 50 documents to prevent quota issues
+      const limitedDocs = existingDocs.slice(0, 50);
+      
+      // Try to save
+      try {
+        localStorage.setItem('submitted-documents', JSON.stringify(limitedDocs));
+        console.log('✅ Saved to submitted-documents. Total docs:', limitedDocs.length);
+      } catch (quotaError) {
+        // If still quota exceeded, remove file data from older documents
+        console.warn('⚠️ Quota exceeded, removing file data from older documents');
+        const docsWithoutOldFiles = limitedDocs.map((doc: any, index: number) => {
+          if (index > 10) { // Keep files only for newest 10 documents
+            return { ...doc, files: [] };
+          }
+          return doc;
+        });
+        localStorage.setItem('submitted-documents', JSON.stringify(docsWithoutOldFiles));
+        console.log('✅ Saved with reduced file data');
+      }
+    } catch (error) {
+      console.error('❌ Failed to save to submitted-documents:', error);
+      toast({
+        title: "Storage Warning",
+        description: "Document saved but file storage is limited due to space constraints.",
+        variant: "default"
+      });
+    }
 
     // Create approval card for Approval Center page
     const approvalCard = {
       id: emergencyDoc.id,
       title: emergencyDoc.title,
       type: emergencyData.documentTypes.includes('circular') ? 'Circular' : 
-            emergencyData.documentTypes.includes('report') ? 'Report' : 'Letter',
-      submitter: user?.fullName || user?.name || userRole,
+            emergencyData.documentTypes.includes('report') ? 'Report' : 
+            emergencyData.documentTypes.includes('letter') ? 'Letter' : 'Circular', // Default to Circular if none selected
+      submitter: user?.name || userRole,
       submittedDate: new Date().toISOString().split('T')[0],
       priority: emergencyDoc.urgencyLevel === 'critical' ? 'high' : emergencyDoc.urgencyLevel,
       description: emergencyDoc.description,
       files: serializedFiles,
-      recipients: recipientsToSend,
+      recipients: recipientsToSend.map((id: string) => getRecipientName(id)), // Convert IDs to names for display
+      recipientIds: recipientsToSend, // Keep original IDs for matching
       isEmergency: true,
       emergencyFeatures: {
         autoEscalation: emergencyData.autoEscalation,
@@ -323,27 +435,73 @@ export const EmergencyWorkflowInterface: React.FC<EmergencyWorkflowInterfaceProp
       }
     };
 
-    // Save to pending approvals for Approval Center page
-    const existingApprovals = JSON.parse(localStorage.getItem('pending-approvals') || '[]');
-    existingApprovals.unshift(approvalCard);
-    localStorage.setItem('pending-approvals', JSON.stringify(existingApprovals));
+    console.log('🚨 Creating Emergency Approval Card:', {
+      id: approvalCard.id,
+      title: approvalCard.title,
+      recipients: approvalCard.recipients,
+      recipientIds: approvalCard.recipientIds,
+      recipientCount: approvalCard.recipients.length
+    });
+
+    // Save to pending approvals for Approval Center page with quota management
+    try {
+      const existingApprovals = JSON.parse(localStorage.getItem('pending-approvals') || '[]');
+      existingApprovals.unshift(approvalCard);
+      
+      // Keep only the last 50 approvals to prevent quota issues
+      const limitedApprovals = existingApprovals.slice(0, 50);
+      
+      // Try to save
+      try {
+        localStorage.setItem('pending-approvals', JSON.stringify(limitedApprovals));
+        console.log('✅ Approval card saved to localStorage. Total cards:', limitedApprovals.length);
+      } catch (quotaError) {
+        // If still quota exceeded, remove file data from older approvals
+        console.warn('⚠️ Quota exceeded, removing file data from older approvals');
+        const approvalsWithoutOldFiles = limitedApprovals.map((approval: any, index: number) => {
+          if (index > 10) { // Keep files only for newest 10 approvals
+            return { ...approval, files: [] };
+          }
+          return approval;
+        });
+        localStorage.setItem('pending-approvals', JSON.stringify(approvalsWithoutOldFiles));
+        console.log('✅ Saved approval card with reduced file data');
+      }
+    } catch (error) {
+      console.error('❌ Failed to save to pending-approvals:', error);
+      toast({
+        title: "Storage Warning",
+        description: "Approval created but file storage is limited due to space constraints.",
+        variant: "default"
+      });
+    }
 
     // Trigger real-time update for Track Documents page
+    console.log('📢 Dispatching emergency-document-created event for Track Documents');
     window.dispatchEvent(new CustomEvent('emergency-document-created', { 
+      detail: { document: emergencyCard } 
+    }));
+    
+    // Also dispatch document-approval-created for Track Documents compatibility
+    window.dispatchEvent(new CustomEvent('document-approval-created', { 
       detail: { document: emergencyCard } 
     }));
 
     // Trigger real-time update for Approval Center page
+    console.log('📢 Dispatching approval-card-created event for Approval Center');
     window.dispatchEvent(new CustomEvent('approval-card-created', { 
+      detail: { approval: approvalCard } 
+    }));
+    
+    // Also dispatch document-approval-created for Approval Center compatibility
+    window.dispatchEvent(new CustomEvent('document-approval-created', { 
       detail: { approval: approvalCard } 
     }));
 
     return emergencyCard;
   };
 
-  const handleEmergencySubmit = async () => {
-    const recipientsToSend = selectedRecipients;
-    
+  const handleEmergencySubmit = () => {
     if (!emergencyData.title || !emergencyData.description || selectedRecipients.length === 0) {
       toast({
         title: "Missing Information",
@@ -353,128 +511,80 @@ export const EmergencyWorkflowInterface: React.FC<EmergencyWorkflowInterfaceProp
       return;
     }
 
-    // Create emergency document directly without opening watermark modal
-    const emergencyDocument = {
-      id: Date.now().toString(),
+    const docId = Date.now().toString();
+    
+    // Create tracking card with proper structure
+    const trackingCard = {
+      id: docId,
       title: emergencyData.title,
+      type: 'Letter',
+      submittedBy: user?.name || userRole,
+      submittedByDesignation: userRole,
+      submittedDate: new Date().toISOString().split('T')[0],
+      status: 'submitted',
+      priority: emergencyData.urgencyLevel,
+      isEmergency: true,
+      workflow: {
+        currentStep: 'Submission',
+        progress: 0,
+        steps: [
+          { 
+            name: 'Submission', 
+            status: 'completed', 
+            assignee: user?.name || userRole, 
+            completedDate: new Date().toISOString().split('T')[0] 
+          }
+        ]
+      },
+      requiresSignature: true,
+      signedBy: [user?.name || userRole],
       description: emergencyData.description,
-      urgencyLevel: emergencyData.urgencyLevel,
-      submittedBy: userRole,
-      autoEscalation: emergencyData.autoEscalation,
-      escalationTimeout: emergencyData.escalationTimeout,
-      escalationTimeUnit: emergencyData.escalationTimeUnit,
-      cyclicEscalation: emergencyData.cyclicEscalation
+      recipients: selectedRecipients,
+      comments: []
     };
-
-    // Create emergency document card for Track Documents and approval card for Approval Center
-    const emergencyCard = await createEmergencyDocumentCard(emergencyDocument, recipientsToSend);
-
-    // Prepare notification settings
-    const emergencyNotificationSettings = {
-      useProfileDefaults,
-      overrideForEmergency: overrideNotifications,
-      notificationStrategy: notificationSettings.notificationLogic,
-      channels: [
-        { type: 'email' as const, enabled: notificationSettings.emailNotifications, interval: parseInt(notificationSettings.emailInterval), unit: notificationSettings.emailUnit },
-        { type: 'sms' as const, enabled: notificationSettings.smsAlerts, interval: parseInt(notificationSettings.smsInterval), unit: notificationSettings.smsUnit },
-        { type: 'push' as const, enabled: notificationSettings.pushNotifications, interval: parseInt(notificationSettings.pushInterval), unit: notificationSettings.pushUnit },
-        { type: 'whatsapp' as const, enabled: notificationSettings.whatsappNotifications, interval: parseInt(notificationSettings.whatsappInterval), unit: notificationSettings.whatsappUnit }
-      ].filter(channel => channel.enabled),
-      schedulingOptions: {
-        interval: parseInt(notificationSettings.emailInterval),
-        unit: notificationSettings.emailUnit
-      }
+    
+    // Create approval card
+    const approvalCard = {
+      id: docId,
+      title: emergencyData.title,
+      type: 'Emergency',
+      submitter: user?.name || userRole,
+      submittedDate: new Date().toISOString().split('T')[0],
+      priority: emergencyData.urgencyLevel,
+      description: emergencyData.description,
+      recipients: selectedRecipients.map(id => getRecipientName(id)),
+      recipientIds: selectedRecipients,
+      isEmergency: true
     };
+    
+    // Save cards
+    const existingDocs = JSON.parse(localStorage.getItem('submitted-documents') || '[]');
+    existingDocs.unshift(trackingCard);
+    localStorage.setItem('submitted-documents', JSON.stringify(existingDocs));
+    
+    const existingApprovals = JSON.parse(localStorage.getItem('pending-approvals') || '[]');
+    existingApprovals.unshift(approvalCard);
+    localStorage.setItem('pending-approvals', JSON.stringify(existingApprovals));
+    
+    // Dispatch events for real-time updates
+    window.dispatchEvent(new CustomEvent('emergency-document-created', { detail: { document: trackingCard } }));
+    window.dispatchEvent(new CustomEvent('document-approval-created', { detail: { document: trackingCard } }));
+    window.dispatchEvent(new CustomEvent('approval-card-created', { detail: { approval: approvalCard } }));
+    
+    // Force storage event for cross-tab updates
+    window.dispatchEvent(new StorageEvent('storage', {
+      key: 'submitted-documents',
+      newValue: JSON.stringify(existingDocs)
+    }));
 
-    // Send emergency notifications using the service
-    try {
-      const { emergencyNotificationService } = await import('@/services/EmergencyNotificationService');
-      await emergencyNotificationService.sendEmergencyNotification(
-        recipientsToSend,
-        emergencyDocument,
-        emergencyNotificationSettings
-      );
-
-      // Initialize escalation if enabled
-      if (emergencyData.autoEscalation) {
-        emergencyNotificationService.initializeEscalation(emergencyDocument, recipientsToSend);
-      }
-
-      // Create submission record
-      const newSubmission: EmergencySubmission = {
-        id: emergencyDocument.id,
-        title: emergencyData.title,
-        description: emergencyData.description,
-        reason: '',
-        urgencyLevel: emergencyData.urgencyLevel,
-        recipients: recipientsToSend,
-        submittedBy: userRole,
-        submittedAt: new Date(),
-        status: 'submitted',
-        escalationLevel: 0,
-        currentRecipientIndex: 0,
-        originalRecipients: [...recipientsToSend],
-        escalationStopped: false
-      };
-
-      setEmergencyHistory([newSubmission, ...emergencyHistory]);
-      
-      // Create channel for emergency collaboration
-      const channelName = `Emergency: ${emergencyData.title.substring(0, 25)}${emergencyData.title.length > 25 ? '...' : ''}`;
-      const newChannel = {
-        id: `emergency-${newSubmission.id}`,
-        name: channelName,
-        members: [userRole, ...recipientsToSend],
-        isPrivate: true,
-        createdAt: new Date().toISOString(),
-        createdBy: userRole,
-        emergencyId: newSubmission.id,
-        emergencyTitle: emergencyData.title,
-        urgencyLevel: emergencyData.urgencyLevel
-      };
-      
-      // Save channel to localStorage
-      const existingChannels = JSON.parse(localStorage.getItem('document-channels') || '[]');
-      existingChannels.unshift(newChannel);
-      localStorage.setItem('document-channels', JSON.stringify(existingChannels));
-      
-      // Reset form
-      resetEmergencyForm();
-
-      // Show additional confirmation for approval card creation
-      setTimeout(() => {
-        toast({
-          title: "Approval Card Ready",
-          description: `Recipients can now view and approve the emergency document in Approval Center → Pending Approvals section`,
-          variant: "default"
-        });
-      }, 4000);
-
-      // Show success notification
-      const notificationBehavior = useProfileDefaults ? 'profile-based' : 'emergency override';
-      toast({
-        title: "EMERGENCY SUBMITTED",
-        description: `Emergency document card created and sent to ${recipientsToSend.length} recipients using ${notificationBehavior} notifications`,
-        duration: 10000,
-      });
-
-      // Show delivery confirmation
-      setTimeout(() => {
-        toast({
-          title: "Cards Created Successfully",
-          description: `Emergency document card is now visible in Track Documents and approval card created in Approval Center → Pending Approvals`,
-          variant: "default"
-        });
-      }, 2000);
-
-    } catch (error) {
-      console.error('Emergency notification failed:', error);
-      toast({
-        title: "Notification Error",
-        description: "Failed to send emergency notifications. Please try again.",
-        variant: "destructive"
-      });
-    }
+    // Reset form and show success
+    resetEmergencyForm();
+    
+    toast({
+      title: "EMERGENCY SUBMITTED",
+      description: `Emergency document created and sent to ${selectedRecipients.length} recipients`,
+      duration: 5000,
+    });
   };
   
   const resetEmergencyForm = () => {
@@ -800,7 +910,7 @@ export const EmergencyWorkflowInterface: React.FC<EmergencyWorkflowInterfaceProp
                     onChange={handleFileUpload}
                     className="hidden"
                     id="emergency-file-upload"
-                    accept=".pdf,.doc,.docx,.txt,.jpg,.png"
+                    accept=".pdf,.doc,.docx,.txt,.jpg,.jpeg,.png,.gif,.bmp,.webp,.svg"
                   />
                   <label htmlFor="emergency-file-upload" className="cursor-pointer">
                     <div className="text-center">
@@ -809,7 +919,7 @@ export const EmergencyWorkflowInterface: React.FC<EmergencyWorkflowInterfaceProp
                         Drag and drop emergency files or click to upload
                       </p>
                       <p className="text-xs text-red-600">
-                        PDF, DOC, DOCX, TXT, JPG, PNG (Max 10MB each)
+                        PDF, DOC, DOCX, TXT, JPG, JPEG, PNG, GIF, BMP, WebP, SVG (Max 10MB each)
                       </p>
                     </div>
                   </label>
@@ -993,8 +1103,8 @@ export const EmergencyWorkflowInterface: React.FC<EmergencyWorkflowInterfaceProp
                             type="radio"
                             id="logic-recipient"
                             name="notification-logic"
-                            checked={notificationSettings.notificationLogic === 'recipient'}
-                            onChange={() => setNotificationSettings({...notificationSettings, notificationLogic: 'recipient'})}
+                            checked={notificationSettings.notificationLogic === 'recipient-based'}
+                            onChange={() => setNotificationSettings({...notificationSettings, notificationLogic: 'recipient-based'})}
                             className="w-4 h-4"
                           />
                           <Label htmlFor="logic-recipient" className="cursor-pointer flex-1">
@@ -1002,7 +1112,7 @@ export const EmergencyWorkflowInterface: React.FC<EmergencyWorkflowInterfaceProp
                             <p className="text-xs text-muted-foreground mt-1">Send notifications based on individual recipient roles and responsibilities</p>
                           </Label>
                         </div>
-                        {notificationSettings.notificationLogic === 'recipient' && selectedRecipients.length > 0 && (
+                        {notificationSettings.notificationLogic === 'recipient-based' && selectedRecipients.length > 0 && (
                           <Button
                             variant="outline"
                             size="sm"
@@ -1020,8 +1130,8 @@ export const EmergencyWorkflowInterface: React.FC<EmergencyWorkflowInterfaceProp
                             type="radio"
                             id="logic-document"
                             name="notification-logic"
-                            checked={notificationSettings.notificationLogic === 'document'}
-                            onChange={() => setNotificationSettings({...notificationSettings, notificationLogic: 'document'})}
+                            checked={notificationSettings.notificationLogic === 'document-based'}
+                            onChange={() => setNotificationSettings({...notificationSettings, notificationLogic: 'document-based'})}
                             className="w-4 h-4"
                           />
                           <Label htmlFor="logic-document" className="cursor-pointer flex-1">
@@ -1034,7 +1144,7 @@ export const EmergencyWorkflowInterface: React.FC<EmergencyWorkflowInterfaceProp
                   </div>
 
                   {/* Alert Channels - Show when Document-Based is selected */}
-                  {notificationSettings.notificationLogic === 'document' && (
+                  {notificationSettings.notificationLogic === 'document-based' && (
                     <>
                       {/* Alert Channels Title */}
                       <div className="pt-4 border-t">
@@ -1516,7 +1626,7 @@ export const EmergencyWorkflowInterface: React.FC<EmergencyWorkflowInterfaceProp
           }}
           user={{
             id: user?.id || 'emergency-user',
-            name: user?.fullName || user?.name || 'Emergency User',
+            name: user?.name || 'Emergency User',
             email: user?.email || 'emergency@example.com',
             role: user?.role || userRole
           }}

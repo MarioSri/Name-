@@ -19,6 +19,7 @@ import { useToast } from '@/hooks/use-toast';
 import * as pdfjsLib from 'pdfjs-dist';
 import mammoth from 'mammoth';
 import * as XLSX from 'xlsx';
+import isJpg from 'is-jpg';
 
 // Set up PDF.js worker with unpkg CDN for better compatibility
 if (typeof window !== 'undefined') {
@@ -99,12 +100,24 @@ export const FileViewer: React.FC<FileViewerProps> = ({ file, files, open, onOpe
 
   const getFileType = (file: File): FileType => {
     const extension = file.name.split('.').pop()?.toLowerCase();
+    const mimeType = file.type.toLowerCase();
     
-    if (extension === 'pdf') return 'pdf';
-    if (['doc', 'docx'].includes(extension || '')) return 'word';
-    if (['xls', 'xlsx'].includes(extension || '')) return 'excel';
-    if (['png', 'jpg', 'jpeg', 'gif', 'bmp', 'webp'].includes(extension || '')) return 'image';
+    console.log('🔍 FileViewer - Detecting file type:', {
+      name: file.name,
+      extension: extension,
+      mimeType: mimeType,
+      size: file.size
+    });
     
+    if (extension === 'pdf' || mimeType === 'application/pdf') return 'pdf';
+    if (['doc', 'docx'].includes(extension || '') || mimeType.includes('word')) return 'word';
+    if (['xls', 'xlsx'].includes(extension || '') || mimeType.includes('sheet')) return 'excel';
+    if (['png', 'jpg', 'jpeg', 'gif', 'bmp', 'webp', 'svg'].includes(extension || '') || mimeType.startsWith('image/')) {
+      console.log('✅ Image file detected:', extension || mimeType);
+      return 'image';
+    }
+    
+    console.warn('⚠️ Unsupported file type:', extension, mimeType);
     return 'unsupported';
   };
 
@@ -249,8 +262,165 @@ export const FileViewer: React.FC<FileViewerProps> = ({ file, files, open, onOpe
   };
 
   const loadImage = async (file: File) => {
-    const url = URL.createObjectURL(file);
-    setContent({ type: 'image', url });
+    console.log('🖼️ Loading image file:', {
+      name: file.name,
+      type: file.type,
+      size: file.size
+    });
+    
+    // Validate file
+    if (!file || file.size === 0) {
+      console.error('❌ Invalid file: empty or null');
+      throw new Error('Invalid image file: file is empty');
+    }
+    
+    if (!file.type.startsWith('image/')) {
+      console.warn('⚠️ File MIME type not recognized as image:', file.type);
+    }
+    
+    return new Promise<void>((resolve, reject) => {
+      // Try to read the file as text first to check if it's already a data URL
+      const textReader = new FileReader();
+      
+      textReader.onload = (e) => {
+        const text = e.target?.result as string;
+        
+        // Check if the file content is already a data URL (happens when File is created from base64)
+        if (text && text.startsWith('data:image/')) {
+          console.log('✅ File is already a data URL, using directly');
+          
+          // Verify the image can be loaded
+          const img = new Image();
+          
+          img.onload = () => {
+            console.log('✅ Image loaded successfully from existing data URL:', {
+              width: img.naturalWidth,
+              height: img.naturalHeight,
+              type: file.type
+            });
+            setContent({ type: 'image', url: text });
+            resolve();
+          };
+          
+          img.onerror = (err) => {
+            console.error('❌ Failed to load image from existing data URL:', err);
+            // Try the normal FileReader approach as fallback
+            loadImageWithFileReader(file, resolve, reject);
+          };
+          
+          img.src = text;
+        } else {
+          // File is binary data, use FileReader to convert to data URL
+          loadImageWithFileReader(file, resolve, reject);
+        }
+      };
+      
+      textReader.onerror = () => {
+        // If text reading fails, try the normal FileReader approach
+        console.log('⚠️ Could not read as text, trying binary read');
+        loadImageWithFileReader(file, resolve, reject);
+      };
+      
+      try {
+        // Try to read a small portion as text to check format
+        textReader.readAsText(file.slice(0, 100));
+      } catch (error) {
+        // If slicing fails, use normal approach
+        loadImageWithFileReader(file, resolve, reject);
+      }
+    });
+  };
+  
+  const loadImageWithFileReader = async (file: File, resolve: () => void, reject: (error: Error) => void) => {
+    // First, validate JPG/JPEG files using is-jpg
+    if (file.type === 'image/jpeg' || file.type === 'image/jpg' || 
+        file.name.toLowerCase().endsWith('.jpg') || file.name.toLowerCase().endsWith('.jpeg')) {
+      
+      console.log('🔍 Validating JPEG file with is-jpg...');
+      
+      try {
+        // Read file as ArrayBuffer for validation
+        const arrayBuffer = await file.arrayBuffer();
+        const uint8Array = new Uint8Array(arrayBuffer);
+        
+        console.log('📊 JPEG validation data:', {
+          fileName: file.name,
+          fileSize: file.size,
+          arrayBufferSize: arrayBuffer.byteLength,
+          firstBytes: Array.from(uint8Array.slice(0, 10)),
+          lastBytes: Array.from(uint8Array.slice(-10))
+        });
+        
+        // Validate JPEG signature
+        const isValidJpg = isJpg(uint8Array);
+        
+        if (!isValidJpg) {
+          console.error('❌ Invalid JPEG file detected by is-jpg');
+          reject(new Error('Invalid JPEG file: File signature does not match JPEG format. The file may be corrupted.'));
+          return;
+        }
+        
+        console.log('✅ JPEG validation passed!');
+      } catch (validationError) {
+        console.error('❌ JPEG validation failed:', validationError);
+        reject(new Error(`JPEG validation failed: ${validationError}`));
+        return;
+      }
+    }
+    
+    const reader = new FileReader();
+    
+    reader.onload = (e) => {
+      const dataUrl = e.target?.result as string;
+      if (!dataUrl) {
+        console.error('❌ Failed to read image data');
+        reject(new Error('Failed to read image data'));
+        return;
+      }
+      
+      console.log('✅ Image data URL created via FileReader:', {
+        length: dataUrl.length,
+        preview: dataUrl.substring(0, 50) + '...'
+      });
+      
+      // Verify the image can be loaded
+      const img = new Image();
+      
+      img.onload = () => {
+        console.log('✅ Image loaded successfully:', {
+          width: img.naturalWidth,
+          height: img.naturalHeight,
+          type: file.type
+        });
+        setContent({ type: 'image', url: dataUrl });
+        resolve();
+      };
+      
+      img.onerror = (err) => {
+        console.error('❌ Failed to load image from data URL:', {
+          error: err,
+          fileType: file.type,
+          fileName: file.name,
+          dataUrlPreview: dataUrl.substring(0, 100),
+          fileSize: file.size
+        });
+        reject(new Error(`Failed to load image. File type: ${file.type}. Size: ${file.size} bytes. The file may be corrupted or in an unsupported format.`));
+      };
+      
+      img.src = dataUrl;
+    };
+    
+    reader.onerror = (err) => {
+      console.error('❌ FileReader error:', err);
+      reject(new Error('Failed to read image file'));
+    };
+    
+    try {
+      reader.readAsDataURL(file);
+    } catch (error) {
+      console.error('❌ Error reading file:', error);
+      reject(error);
+    }
   };
 
 
@@ -392,18 +562,24 @@ export const FileViewer: React.FC<FileViewerProps> = ({ file, files, open, onOpe
 
       case 'image':
         return (
-          <div className="flex justify-center items-center py-4">
+          <div className="flex justify-center items-center py-4 min-h-[400px]">
             <img 
               src={content.url} 
-              alt={file?.name || 'Image'}
+              alt={currentFile?.name || 'Image'}
               style={{ 
                 maxWidth: '100%',
+                maxHeight: '80vh',
                 height: 'auto',
+                width: 'auto',
                 transform: `scale(${zoom / 100}) rotate(${rotation}deg)`,
                 transition: 'transform 0.3s ease',
                 transformOrigin: 'center',
               }}
               className="rounded shadow-lg"
+              onLoad={() => console.log('✅ Image rendered in viewer successfully')}
+              onError={(e) => {
+                console.error('❌ Image rendering in viewer failed:', e);
+              }}
             />
           </div>
         );
