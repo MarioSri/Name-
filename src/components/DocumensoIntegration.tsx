@@ -477,9 +477,17 @@ export const DocumensoIntegration: React.FC<DocumensoIntegrationProps> = ({
     const rect = previewContainerRef.current?.getBoundingClientRect();
     if (!rect) return;
 
+    // Convert mouse position to document coordinate space
+    const mouseX = e.clientX - rect.left;
+    const mouseY = e.clientY - rect.top;
+    
+    // Calculate offset in document space (accounting for zoom)
+    const docMouseX = mouseX / (fileZoom / 100);
+    const docMouseY = mouseY / (fileZoom / 100);
+
     setDragOffset({
-      x: e.clientX - signature.x,
-      y: e.clientY - signature.y
+      x: docMouseX - signature.x,
+      y: docMouseY - signature.y
     });
   };
 
@@ -499,12 +507,18 @@ export const DocumensoIntegration: React.FC<DocumensoIntegrationProps> = ({
       const rect = previewContainerRef.current?.getBoundingClientRect();
       if (!rect) return;
 
+      // Convert mouse position from screen space to document space
+      const mouseX = e.clientX - rect.left;
+      const mouseY = e.clientY - rect.top;
+      const docMouseX = mouseX / (fileZoom / 100);
+      const docMouseY = mouseY / (fileZoom / 100);
+
       setPlacedSignatures(prev => prev.map(sig => {
         if (sig.id === selectedSignatureId) {
           return {
             ...sig,
-            x: e.clientX - dragOffset.x,
-            y: e.clientY - dragOffset.y
+            x: docMouseX - dragOffset.x,
+            y: docMouseY - dragOffset.y
           };
         }
         return sig;
@@ -516,8 +530,11 @@ export const DocumensoIntegration: React.FC<DocumensoIntegrationProps> = ({
       const rect = previewContainerRef.current?.getBoundingClientRect();
       if (!rect) return;
 
+      // Convert mouse position from screen space to document space
       const mouseX = e.clientX - rect.left;
       const mouseY = e.clientY - rect.top;
+      const docMouseX = mouseX / (fileZoom / 100);
+      const docMouseY = mouseY / (fileZoom / 100);
 
       setPlacedSignatures(prev => prev.map(sig => {
         if (sig.id === selectedSignatureId) {
@@ -528,24 +545,24 @@ export const DocumensoIntegration: React.FC<DocumensoIntegrationProps> = ({
 
           switch (resizeCorner) {
             case 'br': // Bottom right
-              newWidth = Math.max(50, mouseX - sig.x);
-              newHeight = Math.max(30, mouseY - sig.y);
+              newWidth = Math.max(50, docMouseX - sig.x);
+              newHeight = Math.max(30, docMouseY - sig.y);
               break;
             case 'bl': // Bottom left
-              newWidth = Math.max(50, sig.x + sig.width - mouseX);
-              newHeight = Math.max(30, mouseY - sig.y);
-              newX = mouseX;
+              newWidth = Math.max(50, sig.x + sig.width - docMouseX);
+              newHeight = Math.max(30, docMouseY - sig.y);
+              newX = docMouseX;
               break;
             case 'tr': // Top right
-              newWidth = Math.max(50, mouseX - sig.x);
-              newHeight = Math.max(30, sig.y + sig.height - mouseY);
-              newY = mouseY;
+              newWidth = Math.max(50, docMouseX - sig.x);
+              newHeight = Math.max(30, sig.y + sig.height - docMouseY);
+              newY = docMouseY;
               break;
             case 'tl': // Top left
-              newWidth = Math.max(50, sig.x + sig.width - mouseX);
-              newHeight = Math.max(30, sig.y + sig.height - mouseY);
-              newX = mouseX;
-              newY = mouseY;
+              newWidth = Math.max(50, sig.x + sig.width - docMouseX);
+              newHeight = Math.max(30, sig.y + sig.height - docMouseY);
+              newX = docMouseX;
+              newY = docMouseY;
               break;
           }
 
@@ -704,7 +721,7 @@ export const DocumensoIntegration: React.FC<DocumensoIntegrationProps> = ({
       const img = new Image();
       img.onload = () => {
         try {
-          const canvas = document.createElement('canvas');
+          const canvas = window.document.createElement('canvas');
           const ctx = canvas.getContext('2d');
           if (!ctx) return resolve(imageData);
           
@@ -995,17 +1012,18 @@ export const DocumensoIntegration: React.FC<DocumensoIntegrationProps> = ({
                             )}
                           </div>
 
-                          {/* File Content Rendering with Overflow Protection */}
-                          <div className="space-y-4 pb-4 w-full">
+                          {/* File Content Rendering with Overflow Protection - Wrapped with signature overlay container */}
+                          <div className="space-y-4 pb-4 w-full relative" style={{
+                            transform: `scale(${fileZoom / 100}) rotate(${fileRotation}deg)`,
+                            transformOrigin: 'top center',
+                            transition: 'transform 0.3s ease',
+                          }}>
                             {fileContent.type === 'pdf' && fileContent.pageCanvases?.map((pageDataUrl: string, index: number) => (
                               <div key={index} className="relative mb-6 overflow-hidden">
                                 <img
                                   src={pageDataUrl}
                                   alt={`Page ${index + 1}`}
                                   style={{
-                                    transform: `scale(${fileZoom / 100}) rotate(${fileRotation}deg)`,
-                                    transformOrigin: 'center',
-                                    transition: 'transform 0.3s ease',
                                     maxWidth: '100%',
                                     height: 'auto',
                                   }}
@@ -1022,9 +1040,6 @@ export const DocumensoIntegration: React.FC<DocumensoIntegrationProps> = ({
                                 <div
                                   className="prose prose-sm max-w-none p-6 bg-white rounded shadow-sm min-h-[300px] break-words"
                                   style={{
-                                    transform: `scale(${fileZoom / 100}) rotate(${fileRotation}deg)`,
-                                    transformOrigin: 'top center',
-                                    transition: 'transform 0.3s ease',
                                     wordWrap: 'break-word',
                                     overflowWrap: 'break-word',
                                     maxWidth: '100%',
@@ -1039,9 +1054,6 @@ export const DocumensoIntegration: React.FC<DocumensoIntegrationProps> = ({
                                 <div
                                   className="overflow-auto bg-white rounded shadow-sm p-4 min-h-[300px] max-h-[600px]"
                                   style={{
-                                    transform: `scale(${fileZoom / 100}) rotate(${fileRotation}deg)`,
-                                    transformOrigin: 'top left',
-                                    transition: 'transform 0.3s ease',
                                     maxWidth: '100%',
                                   }}
                                   dangerouslySetInnerHTML={{ __html: fileContent.html }}
@@ -1057,8 +1069,6 @@ export const DocumensoIntegration: React.FC<DocumensoIntegrationProps> = ({
                                   style={{
                                     maxWidth: '100%',
                                     height: 'auto',
-                                    transform: `scale(${fileZoom / 100}) rotate(${fileRotation}deg)`,
-                                    transition: 'transform 0.3s ease',
                                   }}
                                   className="border shadow-lg rounded"
                                 />
@@ -1073,12 +1083,9 @@ export const DocumensoIntegration: React.FC<DocumensoIntegrationProps> = ({
                                 </div>
                               </div>
                             )}
-                          </div>
 
-
-
-                          {/* Placed Signatures Overlay */}
-                          {placedSignatures.map((signature) => (
+                            {/* Placed Signatures Overlay - Now inside scaled container */}
+                            {placedSignatures.map((signature) => (
                             <div
                               key={signature.id}
                               className={`absolute cursor-pointer select-none transition-all duration-200 ${selectedSignatureId === signature.id ? 'ring-2 ring-blue-400/60 shadow-lg' : 'hover:shadow-md'}`}
@@ -1171,6 +1178,7 @@ export const DocumensoIntegration: React.FC<DocumensoIntegrationProps> = ({
                               )}
                             </div>
                           ))}
+                          </div>
                         </div>
                       ) : (
                         <div className="flex items-center justify-center h-full p-8">
