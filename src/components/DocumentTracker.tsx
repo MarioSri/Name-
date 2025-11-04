@@ -817,13 +817,26 @@ export const DocumentTracker: React.FC<DocumentTrackerProps> = ({ userRole, onVi
                           </div>
                           <div className="flex items-center gap-2">
                             <div className="text-xs text-muted-foreground">{step.assignee}</div>
+                            {/* Dynamic escalation badges */}
+                            {(step as any).escalated && (step as any).escalationLevel && (
+                              <Badge variant="outline" className="text-xs bg-orange-100 border-orange-300 text-orange-700">
+                                Escalated {(step as any).escalationLevel}x
+                              </Badge>
+                            )}
+                            {/* Rejected with bypass indicator */}
+                            {step.status === 'rejected' && document.workflow?.hasBypass && (
+                              <Badge variant="outline" className="text-xs bg-blue-50 text-blue-700 border-blue-300">
+                                BYPASS
+                              </Badge>
+                            )}
+                            {/* Legacy demo badges for DOC-DEMO and DOC-002 */}
                             {document.id === 'DOC-DEMO' && step.name === 'HOD Review' && (
-                              <Badge variant="destructive" className="text-xs">
+                              <Badge variant="outline" className="text-xs bg-orange-100 border-orange-300 text-orange-700">
                                 Escalated 2x
                               </Badge>
                             )}
                             {document.id === 'DOC-002' && step.name === 'Department Review' && (
-                              <Badge variant="destructive" className="text-xs">
+                              <Badge variant="outline" className="text-xs bg-orange-100 border-orange-300 text-orange-700">
                                 Escalated 1x
                               </Badge>
                             )}

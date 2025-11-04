@@ -588,79 +588,140 @@ const Approvals = () => {
                 staticPendingDocs.find(d => d.id === docId);
     
     if (doc) {
+      const currentUserName = user?.fullName || user?.name || 'Approver';
+      const currentDate = new Date().toISOString().split('T')[0];
+      
+      console.log(`✅ [Accept] Processing approval for: ${doc.title}`);
+      console.log(`   User: ${currentUserName}`);
+      console.log(`   Is Parallel: ${doc.isParallel}`);
+      
       // Update document in Track Documents with signature
       const submittedDocs = JSON.parse(localStorage.getItem('submitted-documents') || '[]');
       const updatedDocs = submittedDocs.map((trackDoc: any) => {
-        if (trackDoc.id === docId) {
+        // Match by ID or trackingCardId
+        const isMatch = trackDoc.id === docId || trackDoc.id === doc.trackingCardId;
+        
+        if (isMatch) {
           const currentSignedBy = trackDoc.signedBy || [];
-          const newSignedBy = [...currentSignedBy, user?.fullName || user?.name || 'Approver'];
+          const newSignedBy = [...currentSignedBy, currentUserName];
           
-          // Update workflow to next step
-          const currentStepIndex = trackDoc.workflow.steps.findIndex((step: any) => step.status === 'current');
-          const updatedSteps = trackDoc.workflow.steps.map((step: any, index: number) => {
-            if (index === currentStepIndex) {
-              return { ...step, status: 'completed', completedDate: new Date().toISOString().split('T')[0] };
-            } else if (index === currentStepIndex + 1) {
-              return { ...step, status: 'current' };
-            }
-            return step;
-          });
+          // Check workflow mode
+          const isParallel = trackDoc.workflow?.isParallel || doc.isParallel;
           
-          const isLastStep = currentStepIndex === trackDoc.workflow.steps.length - 1;
-          const newProgress = isLastStep ? 100 : Math.round(((currentStepIndex + 1) / trackDoc.workflow.steps.length) * 100);
-          const newCurrentStep = isLastStep ? 'Complete' : updatedSteps[currentStepIndex + 1]?.name;
-          const newStatus = isLastStep ? 'approved' : 'pending';
-          
-          return {
-            ...trackDoc,
-            signedBy: newSignedBy,
-            status: newStatus,
-            workflow: {
-              ...trackDoc.workflow,
-              currentStep: newCurrentStep,
-              progress: newProgress,
-              steps: updatedSteps
-            }
-          };
+          if (isParallel) {
+            // ⚡ PARALLEL MODE: Track individual signatures, don't advance steps
+            console.log('  ⚡ PARALLEL MODE: Recording signature without advancing workflow');
+            
+            // Find and mark user's step as completed (but others stay 'current')
+            const updatedSteps = trackDoc.workflow.steps.map((step: any) => {
+              const assigneeLower = step.assignee.toLowerCase();
+              const userNameLower = currentUserName.toLowerCase();
+              
+              if (assigneeLower.includes(userNameLower) || assigneeLower.includes(user?.role?.toLowerCase() || '')) {
+                // Mark this user's step as completed
+                return { ...step, status: 'completed', completedDate: currentDate };
+              }
+              return step;
+            });
+            
+            // Calculate progress based on completed signatures
+            const recipientSteps = updatedSteps.filter((s: any) => s.name !== 'Submission');
+            const completedCount = recipientSteps.filter((s: any) => s.status === 'completed').length;
+            const totalRecipients = recipientSteps.length;
+            const newProgress = Math.round((completedCount / totalRecipients) * 100);
+            const allCompleted = completedCount === totalRecipients;
+            
+            console.log(`  📊 Progress: ${completedCount} of ${totalRecipients} signed (${newProgress}%)`);
+            
+            return {
+              ...trackDoc,
+              signedBy: newSignedBy,
+              status: allCompleted ? 'approved' : 'pending',
+              workflow: {
+                ...trackDoc.workflow,
+                currentStep: allCompleted ? 'Complete' : `Signed by ${completedCount} of ${totalRecipients} recipients`,
+                progress: newProgress,
+                steps: updatedSteps
+              }
+            };
+          } else {
+            // 📋 SEQUENTIAL MODE: Advance to next step
+            console.log('  📋 SEQUENTIAL MODE: Advancing workflow to next step');
+            
+            const currentStepIndex = trackDoc.workflow.steps.findIndex((step: any) => step.status === 'current');
+            const updatedSteps = trackDoc.workflow.steps.map((step: any, index: number) => {
+              if (index === currentStepIndex) {
+                return { ...step, status: 'completed', completedDate: currentDate };
+              } else if (index === currentStepIndex + 1) {
+                return { ...step, status: 'current' };
+              }
+              return step;
+            });
+            
+            const isLastStep = currentStepIndex === trackDoc.workflow.steps.length - 1;
+            const newProgress = isLastStep ? 100 : Math.round(((currentStepIndex + 1) / trackDoc.workflow.steps.length) * 100);
+            const newCurrentStep = isLastStep ? 'Complete' : updatedSteps[currentStepIndex + 1]?.name;
+            const newStatus = isLastStep ? 'approved' : 'pending';
+            
+            console.log(`  📊 Progress: Step ${currentStepIndex + 1} of ${trackDoc.workflow.steps.length} (${newProgress}%)`);
+            
+            return {
+              ...trackDoc,
+              signedBy: newSignedBy,
+              status: newStatus,
+              workflow: {
+                ...trackDoc.workflow,
+                currentStep: newCurrentStep,
+                progress: newProgress,
+                steps: updatedSteps
+              }
+            };
+          }
         }
         return trackDoc;
       });
       
       localStorage.setItem('submitted-documents', JSON.stringify(updatedDocs));
       
-      // Notify next recipient if workflow is not complete
-      const updatedDoc = updatedDocs.find((d: any) => d.id === docId);
+      // Handle post-approval notifications
+      const updatedDoc = updatedDocs.find((d: any) => d.id === docId || d.id === doc.trackingCardId);
+      const isParallel = updatedDoc?.workflow?.isParallel || doc.isParallel;
+      
       if (updatedDoc && updatedDoc.status !== 'approved') {
-        const currentStepIndex = updatedDoc.workflow.steps.findIndex((s: any) => s.status === 'current');
-        if (currentStepIndex !== -1) {
-          const nextStep = updatedDoc.workflow.steps[currentStepIndex];
-          const nextRecipientName = nextStep.assignee;
-          
-          // Find recipient ID from recipientIds array
-          const nextRecipientId = doc.recipientIds?.[currentStepIndex - 1]; // -1 because first step is submission
-          
-          if (nextRecipientId && nextRecipientName) {
-            console.log(`📬 Notifying next recipient: ${nextRecipientName} (${nextRecipientId})`);
+        if (!isParallel) {
+          // SEQUENTIAL: Notify next recipient
+          const currentStepIndex = updatedDoc.workflow.steps.findIndex((s: any) => s.status === 'current');
+          if (currentStepIndex !== -1) {
+            const nextStep = updatedDoc.workflow.steps[currentStepIndex];
+            const nextRecipientName = nextStep.assignee;
+            const nextRecipientId = doc.recipientIds?.[currentStepIndex - 1];
             
-            ExternalNotificationDispatcher.notifyRecipient(
-              nextRecipientId,
-              nextRecipientName,
-              {
-                type: 'update',
-                documentTitle: doc.title,
-                submitter: doc.submitter || 'Previous Approver',
-                priority: doc.priority,
-                approvalCenterLink: `${window.location.origin}/approvals`,
-                recipientName: nextRecipientName
-              }
-            ).then((result) => {
-              if (result.success) {
-                console.log(`✅ Next recipient notified via: ${result.channels.join(', ')}`);
-              }
-            }).catch((error) => {
-              console.error('❌ Error notifying next recipient:', error);
-            });
+            if (nextRecipientId && nextRecipientName) {
+              console.log(`📬 Notifying next recipient: ${nextRecipientName}`);
+              
+              ExternalNotificationDispatcher.notifyRecipient(
+                nextRecipientId,
+                nextRecipientName,
+                {
+                  type: 'update',
+                  documentTitle: doc.title,
+                  submitter: currentUserName,
+                  priority: doc.priority,
+                  approvalCenterLink: `${window.location.origin}/approvals`,
+                  recipientName: nextRecipientName
+                }
+              ).then((result) => {
+                if (result.success) {
+                  console.log(`✅ Next recipient notified via: ${result.channels.join(', ')}`);
+                }
+              }).catch((error) => {
+                console.error('❌ Error notifying next recipient:', error);
+              });
+            }
           }
+        } else {
+          // PARALLEL: Notify remaining recipients (optional - they already have the card)
+          console.log('  ⚡ Parallel mode: Other recipients already have access, no sequential notification needed');
         }
       }
       
@@ -670,8 +731,8 @@ const Approvals = () => {
       const approvedDoc = {
         ...doc,
         status: 'approved',
-        approvedBy: user?.name || 'Principal',
-        approvedDate: new Date().toISOString().split('T')[0],
+        approvedBy: currentUserName,
+        approvedDate: currentDate,
         comment: comments[docId]?.join(' ') || 'Document approved successfully.'
       };
       
@@ -704,77 +765,192 @@ const Approvals = () => {
                 staticPendingDocs.find(d => d.id === docId);
     
     if (doc) {
+      const currentUserName = user?.fullName || user?.name || 'Approver';
+      const currentDate = new Date().toISOString().split('T')[0];
+      
+      console.log(`❌ [Reject] Processing rejection for: ${doc.title}`);
+      console.log(`   User: ${currentUserName}`);
+      console.log(`   Is Parallel: ${doc.isParallel}, Has Bypass: ${doc.hasBypass}`);
+      
       // Update document in Track Documents with rejection status
       const submittedDocs = JSON.parse(localStorage.getItem('submitted-documents') || '[]');
       const updatedDocs = submittedDocs.map((trackDoc: any) => {
-        if (trackDoc.id === docId) {
-          // Find current step to mark as rejected and cancel pending steps
-          const currentStepIndex = trackDoc.workflow.steps.findIndex(
-            (step: any) => step.status === 'current'
-          );
+        // Match by ID or trackingCardId
+        const isMatch = trackDoc.id === docId || trackDoc.id === doc.trackingCardId;
+        
+        if (isMatch) {
+          const isParallel = trackDoc.workflow?.isParallel || doc.isParallel;
+          const hasBypass = trackDoc.workflow?.hasBypass || doc.hasBypass;
           
-          const updatedSteps = trackDoc.workflow.steps.map((step: any, index: number) => {
-            if (index === currentStepIndex) {
-              // Mark the current step as rejected
-              return { 
-                ...step, 
-                status: 'rejected',
-                rejectedBy: user?.fullName || user?.name || 'Approver',
-                rejectedDate: new Date().toISOString().split('T')[0]
-              };
-            } else if (step.status === 'pending') {
-              // Mark all pending steps as cancelled
-              return { ...step, status: 'cancelled' };
-            }
-            return step;
-          });
+          // Track rejected users
+          const currentRejectedBy = trackDoc.rejectedBy || [];
+          const newRejectedBy = [...currentRejectedBy, currentUserName];
           
-          return {
-            ...trackDoc,
-            status: 'rejected',
-            rejectedBy: user?.fullName || user?.name || 'Approver',
-            rejectedDate: new Date().toISOString().split('T')[0],
-            workflow: {
-              ...trackDoc.workflow,
-              currentStep: 'Rejected',
-              progress: trackDoc.workflow.progress, // Preserve current progress
-              steps: updatedSteps
-            }
-          };
+          if (isParallel && hasBypass) {
+            // ⚡ PARALLEL WITH BYPASS: Mark user's step as rejected, others continue
+            console.log('  🔄 PARALLEL + BYPASS MODE: Rejection bypassed, workflow continues');
+            
+            const updatedSteps = trackDoc.workflow.steps.map((step: any) => {
+              const assigneeLower = step.assignee.toLowerCase();
+              const userNameLower = currentUserName.toLowerCase();
+              
+              if (assigneeLower.includes(userNameLower) || assigneeLower.includes(user?.role?.toLowerCase() || '')) {
+                // Mark this user's step as rejected
+                return { 
+                  ...step, 
+                  status: 'rejected',
+                  rejectedBy: currentUserName,
+                  rejectedDate: currentDate
+                };
+              }
+              return step;
+            });
+            
+            // Calculate progress: (completed + rejected) / total
+            const recipientSteps = updatedSteps.filter((s: any) => s.name !== 'Submission');
+            const actionedCount = recipientSteps.filter((s: any) => 
+              s.status === 'completed' || s.status === 'rejected'
+            ).length;
+            const totalRecipients = recipientSteps.length;
+            const newProgress = Math.round((actionedCount / totalRecipients) * 100);
+            const allActioned = actionedCount === totalRecipients;
+            
+            console.log(`  📊 Progress: ${actionedCount} of ${totalRecipients} actioned (${newProgress}%)`);
+            
+            return {
+              ...trackDoc,
+              rejectedBy: newRejectedBy,
+              status: allActioned ? 'partially-approved' : 'pending', // Special status for bypass
+              workflow: {
+                ...trackDoc.workflow,
+                currentStep: allActioned ? 'Complete (with rejections)' : `${actionedCount} of ${totalRecipients} completed`,
+                progress: newProgress,
+                steps: updatedSteps
+              }
+            };
+          } else if (isParallel && !hasBypass) {
+            // ⚡ PARALLEL WITHOUT BYPASS: Stop entire workflow, cancel all
+            console.log('  🛑 PARALLEL MODE: Rejection stops all recipients');
+            
+            const currentStepIndex = trackDoc.workflow.steps.findIndex((step: any) => {
+              const assigneeLower = step.assignee.toLowerCase();
+              const userNameLower = currentUserName.toLowerCase();
+              return assigneeLower.includes(userNameLower) || assigneeLower.includes(user?.role?.toLowerCase() || '');
+            });
+            
+            const updatedSteps = trackDoc.workflow.steps.map((step: any, index: number) => {
+              if (index === currentStepIndex) {
+                return { 
+                  ...step, 
+                  status: 'rejected',
+                  rejectedBy: currentUserName,
+                  rejectedDate: currentDate
+                };
+              } else if (step.status === 'current' || step.status === 'pending') {
+                return { ...step, status: 'cancelled' };
+              }
+              return step;
+            });
+            
+            return {
+              ...trackDoc,
+              status: 'rejected',
+              rejectedBy: newRejectedBy,
+              rejectedDate: currentDate,
+              workflow: {
+                ...trackDoc.workflow,
+                currentStep: 'Rejected',
+                progress: trackDoc.workflow.progress,
+                steps: updatedSteps
+              }
+            };
+          } else {
+            // 📋 SEQUENTIAL MODE: Mark rejected, cancel pending
+            console.log('  📋 SEQUENTIAL MODE: Rejection stops workflow');
+            
+            const currentStepIndex = trackDoc.workflow.steps.findIndex(
+              (step: any) => step.status === 'current'
+            );
+            
+            const updatedSteps = trackDoc.workflow.steps.map((step: any, index: number) => {
+              if (index === currentStepIndex) {
+                return { 
+                  ...step, 
+                  status: 'rejected',
+                  rejectedBy: currentUserName,
+                  rejectedDate: currentDate
+                };
+              } else if (step.status === 'pending') {
+                return { ...step, status: 'cancelled' };
+              }
+              return step;
+            });
+            
+            return {
+              ...trackDoc,
+              status: 'rejected',
+              rejectedBy: newRejectedBy,
+              rejectedDate: currentDate,
+              workflow: {
+                ...trackDoc.workflow,
+                currentStep: 'Rejected',
+                progress: trackDoc.workflow.progress,
+                steps: updatedSteps
+              }
+            };
+          }
         }
         return trackDoc;
       });
       
       localStorage.setItem('submitted-documents', JSON.stringify(updatedDocs));
       
-      // Update pending-approvals localStorage to remove for ALL users
-      const pendingApprovals = JSON.parse(localStorage.getItem('pending-approvals') || '[]');
-      const updatedPendingApprovals = pendingApprovals.filter((approval: any) => approval.id !== docId);
-      localStorage.setItem('pending-approvals', JSON.stringify(updatedPendingApprovals));
+      // Handle card removal based on mode
+      const isParallel = doc.isParallel;
+      const hasBypass = doc.hasBypass;
+      
+      const pendingApprovalsData = JSON.parse(localStorage.getItem('pending-approvals') || '[]');
+      let updatedPendingApprovals;
+      
+      if (isParallel && hasBypass) {
+        // BYPASS MODE: Remove only for current user (card stays for others)
+        console.log('  🔄 Bypass mode: Removing card only for current user');
+        updatedPendingApprovals = pendingApprovalsData; // Keep all cards in storage
+        // Remove from local state only
+        setPendingApprovals(prev => prev.filter(d => d.id !== docId));
+      } else {
+        // NO BYPASS: Remove for ALL users
+        console.log('  🗑️ Removing card for ALL recipients');
+        updatedPendingApprovals = pendingApprovalsData.filter((approval: any) => 
+          approval.id !== docId && approval.trackingCardId !== docId
+        );
+        localStorage.setItem('pending-approvals', JSON.stringify(updatedPendingApprovals));
+        setPendingApprovals(prev => prev.filter(d => d.id !== docId));
+        
+        // Broadcast rejection event
+        window.dispatchEvent(new CustomEvent('document-rejected', {
+          detail: { 
+            docId, 
+            rejectedBy: currentUserName,
+            rejectedDate: currentDate
+          }
+        }));
+        
+        // Force storage event
+        window.dispatchEvent(new StorageEvent('storage', {
+          key: 'pending-approvals',
+          newValue: JSON.stringify(updatedPendingApprovals)
+        }));
+      }
       
       // Trigger real-time update for Track Documents
       window.dispatchEvent(new CustomEvent('workflow-updated'));
       
-      // Broadcast rejection event to remove from all recipients' views
-      window.dispatchEvent(new CustomEvent('document-rejected', {
-        detail: { 
-          docId, 
-          rejectedBy: user?.fullName || user?.name || 'Approver',
-          rejectedDate: new Date().toISOString().split('T')[0]
-        }
-      }));
-      
-      // Force storage event for cross-tab updates
-      window.dispatchEvent(new StorageEvent('storage', {
-        key: 'pending-approvals',
-        newValue: JSON.stringify(updatedPendingApprovals)
-      }));
-      
       const rejectedDoc = {
         ...doc,
         status: 'rejected',
-        rejectedBy: user?.fullName || user?.name || 'Principal',
-        rejectedDate: new Date().toISOString().split('T')[0],
+        rejectedBy: currentUserName,
+        rejectedDate: currentDate,
         reason: 'Insufficient documentation',
         comment: userComments.join(' ')
       };
@@ -782,12 +958,13 @@ const Approvals = () => {
       // Add to approval history
       setApprovalHistory(prev => [rejectedDoc, ...prev]);
       
-      // Remove from pending approvals state
-      setPendingApprovals(prev => prev.filter(d => d.id !== docId));
+      const rejectionMessage = isParallel && hasBypass
+        ? "Your rejection has been recorded. Other recipients can still approve."
+        : "Document rejected. Workflow stopped for all recipients.";
       
       toast({
         title: "Document Rejected",
-        description: `${doc.title} has been rejected. Workflow stopped.`,
+        description: rejectionMessage,
         variant: "destructive"
       });
     }
@@ -1373,27 +1550,42 @@ const Approvals = () => {
                   {pendingApprovals.filter(doc => {
                     // First check: Is user in recipients?
                     const isInRecipients = isUserInRecipients(doc);
-                    console.log(`📄 Document Management card "${doc.title}" - Is in recipients: ${isInRecipients}`);
+                    console.log(`📄 Card "${doc.title}" - Is in recipients: ${isInRecipients}`);
                     
                     if (!isInRecipients) {
                       console.log('  ❌ User not in recipients, hiding card');
                       return false;
                     }
                     
-                    // Second check: For sequential workflow, is it user's turn?
-                    // Only applicable for Document Management cards with tracking
+                    // Check if this is a parallel mode card (Emergency Management feature)
+                    if (doc.isParallel) {
+                      console.log('  ⚡ PARALLEL MODE - Showing card to all recipients simultaneously');
+                      return true; // All recipients see card at once
+                    }
+                    
+                    // Second check: For SEQUENTIAL workflow, is it user's turn?
+                    // Only applicable for cards with tracking (Document Management / Emergency Management)
                     if (doc.trackingCardId) {
                       const trackingCards = JSON.parse(localStorage.getItem('submitted-documents') || '[]');
                       const trackingCard = trackingCards.find((tc: any) => tc.id === doc.trackingCardId);
                       
                       if (trackingCard?.workflow?.steps) {
+                        // Check if tracking card is also in parallel mode
+                        if (trackingCard.workflow.isParallel) {
+                          console.log('  ⚡ Tracking card is PARALLEL - Showing to all recipients');
+                          return true;
+                        }
+                        
+                        // SEQUENTIAL MODE: Check if it's user's turn
                         const currentUserRole = user?.role?.toLowerCase() || '';
+                        const currentUserName = user?.name?.toLowerCase() || '';
                         
                         // Find user's step in workflow
                         const userStepIndex = trackingCard.workflow.steps.findIndex((step: any) => {
                           const assigneeLower = step.assignee.toLowerCase();
                           return (
                             assigneeLower.includes(currentUserRole) ||
+                            assigneeLower.includes(currentUserName) ||
                             (user?.department && assigneeLower.includes(user.department.toLowerCase())) ||
                             (user?.branch && assigneeLower.includes(user.branch.toLowerCase()))
                           );
@@ -1403,7 +1595,7 @@ const Approvals = () => {
                           const userStep = trackingCard.workflow.steps[userStepIndex];
                           const shouldShow = userStep.status === 'current';
                           
-                          console.log(`  🔄 Sequential workflow check:`, {
+                          console.log(`  🔄 SEQUENTIAL workflow check:`, {
                             userRole: currentUserRole,
                             userStepIndex,
                             userStepStatus: userStep.status,
@@ -1433,7 +1625,7 @@ const Approvals = () => {
                           <div className="flex-1 space-y-4">
                             <div className="flex items-start justify-between">
                               <div>
-                                <h3 className="font-semibold text-lg flex items-center gap-2">
+                                <h3 className="font-semibold text-lg flex items-center gap-2 flex-wrap">
                                   {doc.title}
                                   {doc.isEmergency && (
                                     <Badge variant="destructive" className="text-xs">
@@ -1441,6 +1633,24 @@ const Approvals = () => {
                                       EMERGENCY
                                     </Badge>
                                   )}
+                                  {(() => {
+                                    // Check if this document has escalation
+                                    const trackingCards = JSON.parse(localStorage.getItem('submitted-documents') || '[]');
+                                    const trackingCard = trackingCards.find((tc: any) => 
+                                      tc.id === doc.id || tc.id === doc.trackingCardId
+                                    );
+                                    const escalationLevel = trackingCard?.workflow?.escalationLevel || 0;
+                                    
+                                    if (escalationLevel > 0) {
+                                      return (
+                                        <Badge variant="outline" className="text-xs bg-orange-50 border-orange-300 text-orange-700">
+                                          <Zap className="w-3 h-3 mr-1" />
+                                          Escalated {escalationLevel}x
+                                        </Badge>
+                                      );
+                                    }
+                                    return null;
+                                  })()}
                                 </h3>
                                 <div className="flex items-center gap-4 mt-2 text-sm text-muted-foreground">
                                   <div className="flex items-center gap-1">
@@ -1483,17 +1693,30 @@ const Approvals = () => {
                             </div>
 
                             {/* Action Required Indicator */}
-                            {doc.isEmergency && (
-                              <div className="flex items-center gap-2 p-2 bg-warning/10 rounded border border-warning/20">
-                                <Zap className="w-4 h-4 text-warning" />
-                                <span className="text-sm font-medium text-warning">
-                                  Action Required
-                                </span>
-                                <Badge variant="destructive" className="text-xs">
-                                  Escalated 2x
-                                </Badge>
-                              </div>
-                            )}
+                            {(() => {
+                              const trackingCards = JSON.parse(localStorage.getItem('submitted-documents') || '[]');
+                              const trackingCard = trackingCards.find((tc: any) => 
+                                tc.id === doc.id || tc.id === doc.trackingCardId
+                              );
+                              const escalationLevel = trackingCard?.workflow?.escalationLevel || 0;
+                              
+                              if (doc.isEmergency || escalationLevel > 0) {
+                                return (
+                                  <div className="flex items-center gap-2 p-2 bg-warning/10 rounded border border-warning/20">
+                                    <Zap className="w-4 h-4 text-warning" />
+                                    <span className="text-sm font-medium text-warning">
+                                      Action Required
+                                    </span>
+                                    {escalationLevel > 0 && (
+                                      <Badge variant="outline" className="text-xs bg-orange-100 border-orange-300 text-orange-700">
+                                        Escalated {escalationLevel}x
+                                      </Badge>
+                                    )}
+                                  </div>
+                                );
+                              }
+                              return null;
+                            })()}
                             
                             {comments[doc.id]?.filter(c => c.author === user?.name).length > 0 && (
                               <div className="space-y-2">

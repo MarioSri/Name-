@@ -503,7 +503,7 @@ export const EmergencyWorkflowInterface: React.FC<EmergencyWorkflowInterfaceProp
     return emergencyCard;
   };
 
-  const handleEmergencySubmit = () => {
+  const handleEmergencySubmit = async () => {
     if (!emergencyData.title || !emergencyData.description || selectedRecipients.length === 0) {
       toast({
         title: "Missing Information",
@@ -513,65 +513,245 @@ export const EmergencyWorkflowInterface: React.FC<EmergencyWorkflowInterfaceProp
       return;
     }
 
-    const docId = Date.now().toString();
+    console.log('🚨 [Emergency Management] Starting submission...');
+    console.log('📋 Distribution Mode:', {
+      smartDelivery: useSmartDelivery,
+      bypassMode: emergencyData.bypassMode,
+      autoEscalation: emergencyData.autoEscalation,
+      cyclicEscalation: emergencyData.cyclicEscalation
+    });
+
+    const docId = `EMG-${Date.now()}`;
+    const currentDate = new Date().toISOString().split('T')[0];
+    const currentUserName = user?.name || userRole;
     
-    // Create tracking card with proper structure
+    // Detect distribution mode
+    const isParallel = useSmartDelivery;
+    const hasBypass = isParallel && emergencyData.bypassMode;
+    const hasEscalation = emergencyData.autoEscalation;
+    const hasCyclicEscalation = hasEscalation && emergencyData.cyclicEscalation;
+    
+    console.log('🔍 Mode detection:', { isParallel, hasBypass, hasEscalation, hasCyclicEscalation });
+    
+    // Convert files to base64 for localStorage
+    const convertFilesToBase64 = async (files: File[]) => {
+      const filePromises = files.map(file => {
+        return new Promise((resolve) => {
+          const reader = new FileReader();
+          reader.onloadend = () => {
+            resolve({
+              name: file.name,
+              size: file.size,
+              type: file.type,
+              data: reader.result
+            });
+          };
+          reader.readAsDataURL(file);
+        });
+      });
+      return Promise.all(filePromises);
+    };
+    
+    const serializedFiles = emergencyData.uploadedFiles.length > 0 
+      ? await convertFilesToBase64(emergencyData.uploadedFiles)
+      : [];
+    
+    // Initialize workflow steps based on mode
+    let workflowSteps = [
+      { 
+        name: 'Submission', 
+        status: 'completed' as const, 
+        assignee: currentUserName, 
+        completedDate: currentDate 
+      }
+    ];
+    
+    // Add recipient workflow steps
+    if (isParallel) {
+      // PARALLEL MODE: All recipients get 'current' status simultaneously
+      console.log('⚡ Parallel mode: All recipients active simultaneously');
+      selectedRecipients.forEach((recipientId) => {
+        const recipientName = getRecipientName(recipientId);
+        workflowSteps.push({
+          name: 'Emergency Review',
+          status: 'current' as const, // ALL current in parallel
+          assignee: recipientName,
+          completedDate: ''
+        });
+      });
+    } else {
+      // SEQUENTIAL MODE: First recipient 'current', rest 'pending'
+      console.log('📋 Sequential mode: One-by-one delivery');
+      selectedRecipients.forEach((recipientId, index) => {
+        const recipientName = getRecipientName(recipientId);
+        workflowSteps.push({
+          name: 'Emergency Review',
+          status: index === 0 ? 'current' as const : 'pending' as const,
+          assignee: recipientName,
+          completedDate: ''
+        });
+      });
+    }
+    
+    // Create tracking card with complete workflow metadata
     const trackingCard = {
       id: docId,
       title: emergencyData.title,
-      type: 'Letter',
-      submittedBy: user?.name || userRole,
+      type: 'Emergency',
+      submittedBy: currentUserName,
+      submittedByDepartment: user?.department || 'Emergency Management',
       submittedByDesignation: userRole,
-      submittedDate: new Date().toISOString().split('T')[0],
-      status: 'submitted',
+      submittedDate: currentDate,
+      status: 'pending' as const,
       priority: emergencyData.urgencyLevel,
       isEmergency: true,
       workflow: {
-        currentStep: 'Submission',
+        currentStep: isParallel ? 'All Recipients Review' : workflowSteps[1]?.name || 'Complete',
         progress: 0,
-        steps: [
-          { 
-            name: 'Submission', 
-            status: 'completed', 
-            assignee: user?.name || userRole, 
-            completedDate: new Date().toISOString().split('T')[0] 
-          }
-        ]
+        steps: workflowSteps,
+        recipients: selectedRecipients,
+        isParallel: isParallel,
+        hasBypass: hasBypass,
+        hasEscalation: hasEscalation,
+        hasCyclicEscalation: hasCyclicEscalation,
+        escalationLevel: 0,
+        escalationTimeout: hasEscalation ? emergencyData.escalationTimeout : undefined,
+        escalationTimeUnit: hasEscalation ? emergencyData.escalationTimeUnit : undefined,
+        lastEscalationTime: hasEscalation ? new Date().toISOString() : undefined
       },
       requiresSignature: true,
-      signedBy: [user?.name || userRole],
+      signedBy: [],
+      rejectedBy: [],
       description: emergencyData.description,
-      recipients: selectedRecipients,
+      reason: emergencyData.reason,
+      files: serializedFiles,
+      assignments: documentAssignments,
       comments: []
     };
     
-    // Create approval card
-    const approvalCard = {
-      id: docId,
-      title: emergencyData.title,
-      type: 'Emergency',
-      submitter: user?.name || userRole,
-      submittedDate: new Date().toISOString().split('T')[0],
-      priority: emergencyData.urgencyLevel,
-      description: emergencyData.description,
-      recipients: selectedRecipients.map(id => getRecipientName(id)),
-      recipientIds: selectedRecipients,
-      isEmergency: true
-    };
+    console.log('✅ Tracking card created:', {
+      id: trackingCard.id,
+      workflow: trackingCard.workflow,
+      recipients: selectedRecipients.length
+    });
     
-    // Save cards
+    // Save tracking card
     const existingDocs = JSON.parse(localStorage.getItem('submitted-documents') || '[]');
     existingDocs.unshift(trackingCard);
     localStorage.setItem('submitted-documents', JSON.stringify(existingDocs));
     
+    // Create approval card(s) - handle file assignments
     const existingApprovals = JSON.parse(localStorage.getItem('pending-approvals') || '[]');
-    existingApprovals.unshift(approvalCard);
+    const approvalCards: any[] = [];
+    
+    const hasCustomAssignments = documentAssignments && Object.keys(documentAssignments).length > 0;
+    
+    if (hasCustomAssignments && serializedFiles.length > 0) {
+      // CUSTOMIZE ASSIGNMENT: Create separate cards per file grouping
+      console.log('📎 Custom assignments detected - creating file-specific cards');
+      
+      const filesByRecipients: { [key: string]: any[] } = {};
+      
+      serializedFiles.forEach((file: any) => {
+        const assignedRecipients = documentAssignments[file.name] || selectedRecipients;
+        const recipientKey = assignedRecipients.sort().join(',');
+        
+        if (!filesByRecipients[recipientKey]) {
+          filesByRecipients[recipientKey] = [];
+        }
+        filesByRecipients[recipientKey].push(file);
+      });
+      
+      Object.entries(filesByRecipients).forEach(([recipientKey, files]) => {
+        const assignedRecipientIds = recipientKey.split(',');
+        const recipientNames = assignedRecipientIds.map(id => getRecipientName(id));
+        
+        const approvalCard = {
+          id: `${docId}-${assignedRecipientIds.join('-')}`,
+          title: files.length === serializedFiles.length 
+            ? emergencyData.title 
+            : `${emergencyData.title} (${files.map((f: any) => f.name).join(', ')})`,
+          type: 'Emergency',
+          submitter: currentUserName,
+          submittedDate: currentDate,
+          status: 'pending',
+          priority: emergencyData.urgencyLevel,
+          description: emergencyData.description,
+          recipients: recipientNames,
+          recipientIds: assignedRecipientIds,
+          files: files,
+          trackingCardId: trackingCard.id,
+          isEmergency: true,
+          isParallel: isParallel,
+          hasBypass: hasBypass,
+          hasEscalation: hasEscalation,
+          isCustomAssignment: true
+        };
+        
+        approvalCards.push(approvalCard);
+        existingApprovals.unshift(approvalCard);
+        
+        console.log(`✅ Assignment card created:`, {
+          files: files.map((f: any) => f.name),
+          recipients: recipientNames
+        });
+      });
+    } else {
+      // DEFAULT: Single card for all recipients
+      console.log('📋 Creating single approval card for all recipients');
+      
+      const recipientNames = selectedRecipients.map(id => getRecipientName(id));
+      
+      const approvalCard = {
+        id: docId,
+        title: emergencyData.title,
+        type: 'Emergency',
+        submitter: currentUserName,
+        submittedDate: currentDate,
+        status: 'pending',
+        priority: emergencyData.urgencyLevel,
+        description: emergencyData.description,
+        recipients: recipientNames,
+        recipientIds: selectedRecipients,
+        files: serializedFiles,
+        trackingCardId: trackingCard.id,
+        isEmergency: true,
+        isParallel: isParallel,
+        hasBypass: hasBypass,
+        hasEscalation: hasEscalation,
+        isCustomAssignment: false
+      };
+      
+      approvalCards.push(approvalCard);
+      existingApprovals.unshift(approvalCard);
+      
+      console.log('✅ Approval card created:', {
+        id: approvalCard.id,
+        recipients: recipientNames.length
+      });
+    }
+    
     localStorage.setItem('pending-approvals', JSON.stringify(existingApprovals));
     
+    console.log(`💾 Saved ${approvalCards.length} approval card(s) to localStorage`);
+    
     // Dispatch events for real-time updates
-    window.dispatchEvent(new CustomEvent('emergency-document-created', { detail: { document: trackingCard } }));
-    window.dispatchEvent(new CustomEvent('document-approval-created', { detail: { document: trackingCard } }));
-    window.dispatchEvent(new CustomEvent('approval-card-created', { detail: { approval: approvalCard } }));
+    window.dispatchEvent(new CustomEvent('emergency-document-created', { 
+      detail: { document: trackingCard } 
+    }));
+    window.dispatchEvent(new CustomEvent('document-approval-created', { 
+      detail: { document: trackingCard } 
+    }));
+    
+    approvalCards.forEach(card => {
+      window.dispatchEvent(new CustomEvent('approval-card-created', { 
+        detail: { approval: card } 
+      }));
+    });
+    
+    window.dispatchEvent(new CustomEvent('document-submitted', {
+      detail: { trackingCard, approvalCards }
+    }));
     
     // Force storage event for cross-tab updates
     window.dispatchEvent(new StorageEvent('storage', {
@@ -579,7 +759,12 @@ export const EmergencyWorkflowInterface: React.FC<EmergencyWorkflowInterfaceProp
       newValue: JSON.stringify(existingDocs)
     }));
     
-    // 🆕 AUTO-CREATE CHANNEL using ChannelAutoCreationService
+    window.dispatchEvent(new StorageEvent('storage', {
+      key: 'pending-approvals',
+      newValue: JSON.stringify(existingApprovals)
+    }));
+    
+    // Auto-create channel
     console.log('📢 Auto-creating channel for Emergency Management submission...');
     
     try {
@@ -589,31 +774,64 @@ export const EmergencyWorkflowInterface: React.FC<EmergencyWorkflowInterfaceProp
         documentId: trackingCard.id,
         documentTitle: emergencyData.title,
         submittedBy: user?.id || 'unknown',
-        submittedByName: user?.name || userRole,
+        submittedByName: currentUserName,
         recipients: selectedRecipients,
         recipientNames: recipientNames,
         source: 'Emergency Management',
         submittedAt: new Date()
       });
       
-      console.log('✅ Channel auto-created:', {
-        channelId: channel.id,
-        channelName: channel.name,
-        members: channel.members.length,
-        documentId: channel.documentId
-      });
+      console.log('✅ Channel auto-created:', channel.name);
     } catch (error) {
       console.error('❌ Failed to auto-create channel:', error);
+    }
+    
+    // Initialize escalation if enabled
+    if (hasEscalation) {
+      console.log('⏰ Initializing auto-escalation...');
+      
+      // Import and initialize EscalationService
+      import('@/services/EscalationService').then(({ escalationService }) => {
+        const timeoutMs = escalationService.constructor.timeUnitToMs(
+          emergencyData.escalationTimeout,
+          emergencyData.escalationTimeUnit
+        );
+        
+        escalationService.initializeEscalation({
+          documentId: docId,
+          documentTitle: emergencyData.title,
+          mode: isParallel ? 'parallel' : 'sequential',
+          timeout: timeoutMs,
+          recipients: selectedRecipients,
+          submittedBy: currentUserName,
+          cyclicEscalation: hasCyclicEscalation
+        });
+        
+        console.log('✅ Escalation service initialized:', {
+          documentId: docId,
+          mode: isParallel ? 'parallel' : 'sequential',
+          timeout: `${emergencyData.escalationTimeout} ${emergencyData.escalationTimeUnit}`,
+          cyclic: hasCyclicEscalation
+        });
+      }).catch((error) => {
+        console.error('❌ Failed to initialize escalation service:', error);
+      });
     }
 
     // Reset form and show success
     resetEmergencyForm();
     
+    const modeDescription = isParallel 
+      ? (hasBypass ? 'Parallel with Bypass' : 'Parallel (all recipients)')
+      : 'Sequential (one-by-one)';
+    
     toast({
-      title: "EMERGENCY SUBMITTED",
-      description: `Emergency document created and sent to ${selectedRecipients.length} recipients. A collaboration channel has been created in Department Chat.`,
-      duration: 5000,
+      title: "🚨 EMERGENCY SUBMITTED",
+      description: `Emergency document created in ${modeDescription} mode${hasEscalation ? ' with auto-escalation' : ''}. Sent to ${selectedRecipients.length} recipients.`,
+      duration: 6000,
     });
+    
+    console.log('✅ Emergency submission complete');
   };
   
   const resetEmergencyForm = () => {
