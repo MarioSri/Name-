@@ -342,12 +342,27 @@ export const DocumentTracker: React.FC<DocumentTrackerProps> = ({ userRole, onVi
       loadApprovalComments();
     };
     
+    // Listen for document signature events
+    const handleDocumentSigned = (event: any) => {
+      console.log('🖊️ [Track Documents] Document signed event received:', event.detail);
+      loadSubmittedDocuments();
+      
+      if (event.detail?.documentId) {
+        toast({
+          title: "Document Signed",
+          description: `Document has been digitally signed and updated`,
+          duration: 3000,
+        });
+      }
+    };
+    
     window.addEventListener('approval-comments-changed', handleApprovalChanges);
     window.addEventListener('workflow-updated', handleWorkflowUpdate);
     window.addEventListener('emergency-document-created', handleEmergencyDocumentCreated as EventListener);
     window.addEventListener('document-approval-created', handleDocumentSubmitted);
     window.addEventListener('approval-card-created', handleDocumentSubmitted);
     window.addEventListener('document-submitted', handleDocumentSubmitted);
+    window.addEventListener('document-signed', handleDocumentSigned);
     
     window.addEventListener('storage', handleStorageChange);
     return () => {
@@ -358,6 +373,7 @@ export const DocumentTracker: React.FC<DocumentTrackerProps> = ({ userRole, onVi
       window.removeEventListener('document-approval-created', handleDocumentSubmitted);
       window.removeEventListener('approval-card-created', handleDocumentSubmitted);
       window.removeEventListener('document-submitted', handleDocumentSubmitted);
+      window.removeEventListener('document-signed', handleDocumentSigned);
     };
   }, []);
 
@@ -979,6 +995,14 @@ export const DocumentTracker: React.FC<DocumentTrackerProps> = ({ userRole, onVi
                           }
                         }
                         
+                        // Attach signature metadata to files if document has signatures
+                        if ((document as any).signatureMetadata && reconstructedFiles.length > 0) {
+                          console.log('🖊️ [Track Documents] Attaching signature metadata to files:', (document as any).signatureMetadata);
+                          reconstructedFiles.forEach(file => {
+                            (file as any).signatureMetadata = (document as any).signatureMetadata;
+                          });
+                        }
+                        
                         // Use multi-file viewer if available and has multiple files
                         if (reconstructedFiles.length > 1 && onViewFiles) {
                           onViewFiles(reconstructedFiles);
@@ -1002,16 +1026,103 @@ export const DocumentTracker: React.FC<DocumentTrackerProps> = ({ userRole, onVi
                     <Eye className="h-4 w-4 mr-2" />
                     View
                   </Button>
-                  <Button variant="outline" size="sm" onClick={() => {
-                    // Simulate document download
-                    const link = window.document.createElement('a');
-                    link.href = `data:text/plain;charset=utf-8,Document: ${document.title}\nType: ${document.type}\nSubmitted By: ${document.submittedBy}\nDate: ${document.submittedDate}\nStatus: ${document.status}`;
-                    link.download = `${document.title.replace(/[^a-z0-9]/gi, '_').toLowerCase()}.txt`;
-                    link.click();
-                    toast({
-                      title: "Download Started",
-                      description: `${document.title} is being downloaded`,
-                    });
+                  <Button variant="outline" size="sm" onClick={async () => {
+                    const documentFiles = (document as any).files;
+                    
+                    // Download actual files if available
+                    if (documentFiles && documentFiles.length > 0) {
+                      try {
+                        console.log('📥 [Track Documents] Starting download for', documentFiles.length, 'files');
+                        
+                        for (const file of documentFiles) {
+                          const fileName = file.name || 'document';
+                          const fileType = file.type || 'application/octet-stream';
+                          const fileData = file.data || file;
+                          
+                          console.log('📄 [Track Documents] Downloading file:', {
+                            name: fileName,
+                            type: fileType,
+                            hasData: !!fileData,
+                            dataType: typeof fileData
+                          });
+                          
+                          // If file has base64 data, reconstruct and download
+                          if (typeof fileData === 'string' && fileData.startsWith('data:')) {
+                            try {
+                              // Parse the data URL
+                              const matches = fileData.match(/^data:([^;]+);base64,(.+)$/);
+                              if (matches && matches.length === 3) {
+                                const mimeType = matches[1];
+                                const base64Data = matches[2];
+                                
+                                // Convert base64 to binary
+                                const byteCharacters = atob(base64Data);
+                                const byteNumbers = new Array(byteCharacters.length);
+                                for (let i = 0; i < byteCharacters.length; i++) {
+                                  byteNumbers[i] = byteCharacters.charCodeAt(i);
+                                }
+                                const byteArray = new Uint8Array(byteNumbers);
+                                const blob = new Blob([byteArray], { type: mimeType });
+                                
+                                // Create download link
+                                const url = URL.createObjectURL(blob);
+                                const link = window.document.createElement('a');
+                                link.href = url;
+                                link.download = fileName;
+                                window.document.body.appendChild(link);
+                                link.click();
+                                window.document.body.removeChild(link);
+                                URL.revokeObjectURL(url);
+                                
+                                console.log('✅ [Track Documents] File downloaded:', fileName);
+                              } else {
+                                console.error('❌ [Track Documents] Invalid data URL format for:', fileName);
+                              }
+                            } catch (err) {
+                              console.error('❌ [Track Documents] Failed to download file:', fileName, err);
+                            }
+                          } else if (fileData instanceof File || fileData instanceof Blob) {
+                            // If it's already a File or Blob object, download directly
+                            const url = URL.createObjectURL(fileData);
+                            const link = window.document.createElement('a');
+                            link.href = url;
+                            link.download = fileName;
+                            window.document.body.appendChild(link);
+                            link.click();
+                            window.document.body.removeChild(link);
+                            URL.revokeObjectURL(url);
+                            
+                            console.log('✅ [Track Documents] File downloaded:', fileName);
+                          }
+                        }
+                        
+                        toast({
+                          title: "Download Complete",
+                          description: `${documentFiles.length} file(s) downloaded successfully`,
+                        });
+                      } catch (error) {
+                        console.error('❌ [Track Documents] Download failed:', error);
+                        toast({
+                          title: "Download Failed",
+                          description: "Failed to download files",
+                          variant: "destructive"
+                        });
+                      }
+                    } else {
+                      // Fallback: download HTML document for demo documents without files
+                      const htmlFile = createDocumentFile(document);
+                      const url = URL.createObjectURL(htmlFile);
+                      const link = window.document.createElement('a');
+                      link.href = url;
+                      link.download = htmlFile.name;
+                      link.click();
+                      URL.revokeObjectURL(url);
+                      
+                      toast({
+                        title: "Download Started",
+                        description: `${document.title} downloaded as HTML`,
+                      });
+                    }
                   }}>
                     <Download className="h-4 w-4 mr-2" />
                     Download

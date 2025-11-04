@@ -89,6 +89,8 @@ export const DocumensoIntegration: React.FC<DocumensoIntegrationProps> = ({
     width: number;
     height: number;
     rotation: number;
+    previewWidth?: number;  // Store preview dimensions for scale calculation
+    previewHeight?: number;
   }>>([]);
   const [selectedSignatureId, setSelectedSignatureId] = useState<string | null>(null);
   const [isDragging, setIsDragging] = useState(false);
@@ -240,19 +242,176 @@ export const DocumensoIntegration: React.FC<DocumensoIntegrationProps> = ({
     setFileContent({ type: 'image', url });
   };
 
+  // Merge signature overlays with the document file
+  const mergeSignaturesWithDocument = async (): Promise<any[]> => {
+    if (placedSignatures.length === 0) {
+      console.warn('⚠️ No signatures to merge');
+      return fileContent?.type === 'pdf' && fileContent.pageCanvases 
+        ? fileContent.pageCanvases.map((page: string, idx: number) => ({
+            name: `${currentFile?.name || 'document'}_page_${idx + 1}`,
+            type: currentFile?.type || 'application/pdf',
+            size: 0,
+            data: page
+          }))
+        : [];
+    }
+
+    console.log('🎨 Merging signatures with document:', {
+      signatureCount: placedSignatures.length,
+      fileType: fileContent?.type,
+      documentId: document.id
+    });
+
+    const signedFiles: any[] = [];
+
+    // Handle PDF documents
+    if (fileContent?.type === 'pdf' && fileContent.pageCanvases) {
+      for (let pageIndex = 0; pageIndex < fileContent.pageCanvases.length; pageIndex++) {
+        const pageDataUrl = fileContent.pageCanvases[pageIndex];
+        
+        // Create canvas for merging
+        const canvas = window.document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
+        if (!ctx) continue;
+
+        // Load page image
+        const pageImg = new Image();
+        await new Promise((resolve, reject) => {
+          pageImg.onload = resolve;
+          pageImg.onerror = reject;
+          pageImg.src = pageDataUrl;
+        });
+
+        canvas.width = pageImg.width;
+        canvas.height = pageImg.height;
+        ctx.drawImage(pageImg, 0, 0);
+
+        // Draw all signatures on this page
+        for (const signature of placedSignatures) {
+          // Calculate scale ratio between preview and actual canvas
+          const previewWidth = signature.previewWidth || 800;
+          const previewHeight = signature.previewHeight || 600;
+          const scaleX = canvas.width / previewWidth;
+          const scaleY = canvas.height / previewHeight;
+          
+          // Map preview coordinates to canvas coordinates
+          const canvasX = signature.x * scaleX;
+          const canvasY = signature.y * scaleY;
+          const canvasWidth = signature.width * scaleX;
+          const canvasHeight = signature.height * scaleY;
+          
+          console.log('📐 PDF Signature scale mapping:', {
+            preview: { x: signature.x, y: signature.y, w: signature.width, h: signature.height },
+            canvas: { x: canvasX, y: canvasY, w: canvasWidth, h: canvasHeight },
+            scale: { x: scaleX, y: scaleY },
+            canvasSize: { w: canvas.width, h: canvas.height },
+            previewSize: { w: previewWidth, h: previewHeight }
+          });
+          
+          const sigImg = new Image();
+          await new Promise((resolve) => {
+            sigImg.onload = resolve;
+            sigImg.onerror = resolve;
+            sigImg.src = signature.data;
+          });
+
+          ctx.save();
+          ctx.translate(canvasX + canvasWidth / 2, canvasY + canvasHeight / 2);
+          ctx.rotate((signature.rotation * Math.PI) / 180);
+          ctx.drawImage(sigImg, -canvasWidth / 2, -canvasHeight / 2, canvasWidth, canvasHeight);
+          ctx.restore();
+        }
+
+        signedFiles.push({
+          name: `${currentFile?.name || 'document'}_signed_page_${pageIndex + 1}.png`,
+          type: 'image/png',
+          size: canvas.toDataURL().length,
+          data: canvas.toDataURL('image/png')
+        });
+      }
+    }
+    // Handle image files
+    else if (fileContent?.type === 'image') {
+      const canvas = window.document.createElement('canvas');
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return signedFiles;
+
+      const img = new Image();
+      await new Promise((resolve, reject) => {
+        img.onload = resolve;
+        img.onerror = reject;
+        img.src = fileContent.url;
+      });
+
+      canvas.width = img.width;
+      canvas.height = img.height;
+      ctx.drawImage(img, 0, 0);
+
+      // Draw all signatures
+      for (const signature of placedSignatures) {
+        // Calculate scale ratio between preview and actual canvas
+        const previewWidth = signature.previewWidth || 800;
+        const previewHeight = signature.previewHeight || 600;
+        const scaleX = canvas.width / previewWidth;
+        const scaleY = canvas.height / previewHeight;
+        
+        // Map preview coordinates to canvas coordinates
+        const canvasX = signature.x * scaleX;
+        const canvasY = signature.y * scaleY;
+        const canvasWidth = signature.width * scaleX;
+        const canvasHeight = signature.height * scaleY;
+        
+        console.log('📐 Image Signature scale mapping:', {
+          preview: { x: signature.x, y: signature.y, w: signature.width, h: signature.height },
+          canvas: { x: canvasX, y: canvasY, w: canvasWidth, h: canvasHeight },
+          scale: { x: scaleX, y: scaleY },
+          canvasSize: { w: canvas.width, h: canvas.height },
+          previewSize: { w: previewWidth, h: previewHeight }
+        });
+        
+        const sigImg = new Image();
+        await new Promise((resolve) => {
+          sigImg.onload = resolve;
+          sigImg.onerror = resolve;
+          sigImg.src = signature.data;
+        });
+
+        ctx.save();
+        ctx.translate(canvasX + canvasWidth / 2, canvasY + canvasHeight / 2);
+        ctx.rotate((signature.rotation * Math.PI) / 180);
+        ctx.drawImage(sigImg, -canvasWidth / 2, -canvasHeight / 2, canvasWidth, canvasHeight);
+        ctx.restore();
+      }
+
+      signedFiles.push({
+        name: `${currentFile?.name || 'document'}_signed.png`,
+        type: 'image/png',
+        size: canvas.toDataURL().length,
+        data: canvas.toDataURL('image/png')
+      });
+    }
+
+    console.log('✅ Signatures merged:', {
+      originalFileCount: fileContent?.type === 'pdf' ? fileContent.pageCanvases?.length : 1,
+      signedFileCount: signedFiles.length
+    });
+
+    return signedFiles;
+  };
+
   const handleSign = async () => {
     setIsProcessing(true);
     
     try {
-      
       // Enhanced Documenso signing process
       const steps = [
         { message: 'Connecting to Documenso servers...', progress: 15 },
         { message: 'Validating digital certificate...', progress: 30 },
         { message: 'Preparing document for signature...', progress: 45 },
         { message: 'Applying cryptographic signature...', progress: 65 },
-        { message: 'Generating blockchain timestamp...', progress: 80 },
-        { message: 'Verifying signature integrity...', progress: 95 },
+        { message: 'Merging signatures with document...', progress: 75 },
+        { message: 'Generating blockchain timestamp...', progress: 85 },
+        { message: 'Updating document records...', progress: 95 },
         { message: 'Signature complete and verified!', progress: 100 }
       ];
 
@@ -266,6 +425,93 @@ export const DocumensoIntegration: React.FC<DocumensoIntegrationProps> = ({
         });
       }
 
+      // Merge signatures with document
+      console.log('🔄 Starting signature merge process for document:', document.id);
+      const signedFiles = await mergeSignaturesWithDocument();
+      
+      if (signedFiles.length > 0) {
+        // Store signature metadata instead of full signed files to avoid quota issues
+        const signatureMetadata = placedSignatures.map(sig => ({
+          id: sig.id,
+          x: sig.x,
+          y: sig.y,
+          width: sig.width,
+          height: sig.height,
+          rotation: sig.rotation,
+          data: sig.data,
+          previewWidth: sig.previewWidth,
+          previewHeight: sig.previewHeight
+        }));
+        
+        // Update submitted-documents (Track Documents) - store metadata only
+        try {
+          const submittedDocs = JSON.parse(localStorage.getItem('submitted-documents') || '[]');
+          const updatedSubmittedDocs = submittedDocs.map((doc: any) => {
+            if (doc.id === document.id) {
+              console.log('✅ Updating Track Document with signature metadata');
+              return {
+                ...doc,
+                signatureMetadata: signatureMetadata,
+                signedBy: [...(doc.signedBy || []), user.name],
+                lastSignedDate: new Date().toISOString().split('T')[0],
+                signatureCount: (doc.signatureCount || 0) + placedSignatures.length,
+                hasDynamicSignatures: true // Flag to regenerate signed version on view
+              };
+            }
+            return doc;
+          });
+          localStorage.setItem('submitted-documents', JSON.stringify(updatedSubmittedDocs));
+          console.log('✅ Track Documents updated successfully');
+        } catch (quotaError) {
+          console.error('⚠️ LocalStorage quota exceeded for submitted-documents:', quotaError);
+          toast({
+            title: "Storage Warning",
+            description: "Document signed successfully but storage is limited. Consider clearing old data.",
+            variant: "default"
+          });
+        }
+        
+        // Update pending-approvals (Approval Center) - store metadata only
+        try {
+          const pendingApprovals = JSON.parse(localStorage.getItem('pending-approvals') || '[]');
+          const updatedApprovals = pendingApprovals.map((approval: any) => {
+            if (approval.id === document.id) {
+              console.log('✅ Updating Approval Center with signature metadata');
+              return {
+                ...approval,
+                signatureMetadata: signatureMetadata,
+                signedBy: [...(approval.signedBy || []), user.name],
+                lastSignedDate: new Date().toISOString().split('T')[0],
+                signatureCount: (approval.signatureCount || 0) + placedSignatures.length,
+                hasDynamicSignatures: true // Flag to regenerate signed version on view
+              };
+            }
+            return approval;
+          });
+          localStorage.setItem('pending-approvals', JSON.stringify(updatedApprovals));
+          console.log('✅ Approval Center updated successfully');
+        } catch (quotaError) {
+          console.error('⚠️ LocalStorage quota exceeded for pending-approvals:', quotaError);
+        }
+        
+        // Dispatch events for real-time updates
+        console.log('📢 Dispatching document-signed event');
+        window.dispatchEvent(new CustomEvent('document-signed', {
+          detail: {
+            documentId: document.id,
+            signedFiles: signedFiles,
+            signedBy: user.name,
+            signatureCount: placedSignatures.length
+          }
+        }));
+        
+        console.log('✅ Document signature update complete:', {
+          documentId: document.id,
+          signedFileCount: signedFiles.length,
+          totalSignatures: placedSignatures.length
+        });
+      }
+
       setIsCompleted(true);
       setIsProcessing(false);
       
@@ -274,11 +520,12 @@ export const DocumensoIntegration: React.FC<DocumensoIntegrationProps> = ({
         onComplete();
         toast({
           title: "Document Signed Successfully",
-          description: `${document.title} has been digitally signed with AI-optimized placement and forwarded to the next recipient.`,
+          description: `${document.title} has been digitally signed and updated in Track Documents and Approval Center.`,
         });
       }, 1500);
       
     } catch (error) {
+      console.error('❌ Signature merge failed:', error);
       setIsProcessing(false);
       toast({
         title: "Signing Failed",
@@ -443,6 +690,11 @@ export const DocumensoIntegration: React.FC<DocumensoIntegrationProps> = ({
 
   // Place signature on document preview - Inside signature field box
   const placeSignatureOnDocument = (signatureData: string) => {
+    // Get preview container dimensions for scale calculation
+    const previewRect = previewContainerRef.current?.getBoundingClientRect();
+    const previewWidth = previewRect?.width || 800;
+    const previewHeight = previewRect?.height || 600;
+    
     const newPlacedSignature = {
       id: Date.now().toString(),
       data: signatureData,
@@ -450,18 +702,33 @@ export const DocumensoIntegration: React.FC<DocumensoIntegrationProps> = ({
       y: signatureField.y,
       width: signatureField.width, // Use signature field size
       height: signatureField.height,
-      rotation: signatureField.rotation // Match field rotation
+      rotation: signatureField.rotation, // Match field rotation
+      previewWidth: previewWidth, // Store for scale calculation during merge
+      previewHeight: previewHeight
     };
     
-    console.log('Placing signature at:', newPlacedSignature);
-    console.log('Signature field:', signatureField);
+    console.log('🎨 Placing signature on document:', {
+      position: { x: newPlacedSignature.x, y: newPlacedSignature.y },
+      size: { width: newPlacedSignature.width, height: newPlacedSignature.height },
+      rotation: newPlacedSignature.rotation,
+      previewDimensions: { width: previewWidth, height: previewHeight },
+      fileType: fileContent?.type,
+      currentSignatureCount: placedSignatures.length
+    });
     
-    setPlacedSignatures(prev => [...prev, newPlacedSignature]);
+    setPlacedSignatures(prev => {
+      const updated = [...prev, newPlacedSignature];
+      console.log('📝 Updated signatures array - Total signatures:', updated.length);
+      updated.forEach((sig, idx) => {
+        console.log(`  Signature ${idx + 1}: x=${sig.x}, y=${sig.y}, visible in DOM`);
+      });
+      return updated;
+    });
     setSelectedSignatureId(newPlacedSignature.id);
     
     toast({
       title: "Signature Placed",
-      description: `Signature placed inside field box at (${signatureField.x}, ${signatureField.y})`
+      description: `Signature #${placedSignatures.length + 1} placed at (${Math.round(signatureField.x)}, ${Math.round(signatureField.y)}) on ${fileContent?.type?.toUpperCase() || 'document'}`
     });
   };
 
@@ -1019,7 +1286,7 @@ export const DocumensoIntegration: React.FC<DocumensoIntegrationProps> = ({
                             transition: 'transform 0.3s ease',
                           }}>
                             {fileContent.type === 'pdf' && fileContent.pageCanvases?.map((pageDataUrl: string, index: number) => (
-                              <div key={index} className="relative mb-6 overflow-hidden">
+                              <div key={index} className="relative mb-6 overflow-hidden" id={`pdf-page-${index}`}>
                                 <img
                                   src={pageDataUrl}
                                   alt={`Page ${index + 1}`}
@@ -1032,6 +1299,98 @@ export const DocumensoIntegration: React.FC<DocumensoIntegrationProps> = ({
                                 <Badge variant="secondary" className="absolute top-2 right-2 bg-background/95 backdrop-blur z-20">
                                   Page {index + 1} of {fileContent.totalPages}
                                 </Badge>
+                                
+                                {/* Render signatures on this PDF page */}
+                                {placedSignatures.map((signature) => (
+                                  <div
+                                    key={`${signature.id}-page-${index}`}
+                                    className={`absolute cursor-pointer select-none transition-all duration-200 ${selectedSignatureId === signature.id ? 'ring-2 ring-blue-400/60 shadow-lg border-2 border-blue-500' : 'hover:shadow-sm border border-transparent'}`}
+                                    style={{
+                                      left: `${signature.x}px`,
+                                      top: `${signature.y}px`,
+                                      width: `${signature.width}px`,
+                                      height: `${signature.height}px`,
+                                      transform: `rotate(${signature.rotation}deg)`,
+                                      transformOrigin: 'center',
+                                      zIndex: selectedSignatureId === signature.id ? 100 : 50,
+                                      pointerEvents: 'auto',
+                                    }}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setSelectedSignatureId(signature.id);
+                                      console.log('📝 PDF Signature clicked on page', index + 1, ':', signature.id);
+                                    }}
+                                    onMouseDown={(e) => handleSignatureMouseDown(e, signature.id)}
+                                  >
+                                    <img
+                                      src={signature.data}
+                                      alt="Signature"
+                                      className="w-full h-full object-contain pointer-events-none"
+                                      style={{ 
+                                        background: 'transparent',
+                                        mixBlendMode: 'multiply',
+                                        opacity: 1
+                                      }}
+                                      draggable={false}
+                                    />
+                                    
+                                    {/* Control Buttons (when selected) */}
+                                    {selectedSignatureId === signature.id && (
+                                      <div className="absolute -top-10 left-0 right-0 flex justify-center gap-1 bg-white/95 backdrop-blur-sm rounded-t-lg border border-b-0 border-blue-500 p-1">
+                                        <Button
+                                          size="sm"
+                                          variant="ghost"
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            rotateSignature(signature.id);
+                                          }}
+                                          className="h-7 px-2"
+                                          title="Rotate 90°"
+                                        >
+                                          <RotateCcw className="w-4 h-4" />
+                                        </Button>
+                                        <Button
+                                          size="sm"
+                                          variant="ghost"
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            deleteSignature(signature.id);
+                                          }}
+                                          className="h-7 px-2 text-red-600 hover:text-red-700 hover:bg-red-50"
+                                          title="Delete"
+                                        >
+                                          <X className="w-4 h-4" />
+                                        </Button>
+                                        <div className="flex items-center px-2 text-xs text-gray-600">
+                                          <Move className="w-3 h-3 mr-1" />
+                                          Drag
+                                        </div>
+                                      </div>
+                                    )}
+
+                                    {/* Resize Corners (when selected) */}
+                                    {selectedSignatureId === signature.id && (
+                                      <>
+                                        <div
+                                          className="absolute -top-2 -left-2 w-4 h-4 bg-blue-500 rounded-full cursor-nwse-resize hover:bg-blue-600 border-2 border-white shadow-md"
+                                          onMouseDown={(e) => handleResizeMouseDown(e, signature.id, 'tl')}
+                                        />
+                                        <div
+                                          className="absolute -top-2 -right-2 w-4 h-4 bg-blue-500 rounded-full cursor-nesw-resize hover:bg-blue-600 border-2 border-white shadow-md"
+                                          onMouseDown={(e) => handleResizeMouseDown(e, signature.id, 'tr')}
+                                        />
+                                        <div
+                                          className="absolute -bottom-2 -left-2 w-4 h-4 bg-blue-500 rounded-full cursor-nesw-resize hover:bg-blue-600 border-2 border-white shadow-md"
+                                          onMouseDown={(e) => handleResizeMouseDown(e, signature.id, 'bl')}
+                                        />
+                                        <div
+                                          className="absolute -bottom-2 -right-2 w-4 h-4 bg-blue-500 rounded-full cursor-nwse-resize hover:bg-blue-600 border-2 border-white shadow-md"
+                                          onMouseDown={(e) => handleResizeMouseDown(e, signature.id, 'br')}
+                                        />
+                                      </>
+                                    )}
+                                  </div>
+                                ))}
                               </div>
                             ))}
 
@@ -1084,100 +1443,112 @@ export const DocumensoIntegration: React.FC<DocumensoIntegrationProps> = ({
                               </div>
                             )}
 
-                            {/* Placed Signatures Overlay - Now inside scaled container */}
-                            {placedSignatures.map((signature) => (
-                            <div
-                              key={signature.id}
-                              className={`absolute cursor-pointer select-none transition-all duration-200 ${selectedSignatureId === signature.id ? 'ring-2 ring-blue-400/60 shadow-lg' : 'hover:shadow-md'}`}
-                              style={{
-                                left: `${signature.x}px`,
-                                top: `${signature.y}px`,
-                                width: `${signature.width}px`,
-                                height: `${signature.height}px`,
-                                transform: `rotate(${signature.rotation}deg)`,
-                                transformOrigin: 'center',
-                                zIndex: selectedSignatureId === signature.id ? 50 : 10,
-                              }}
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setSelectedSignatureId(signature.id);
-                              }}
-                              onMouseDown={(e) => handleSignatureMouseDown(e, signature.id)}
-                            >
-                              {/* Signature Image - Authentic ink absorption */}
-                              <img
-                                src={signature.data}
-                                alt="Signature"
-                                className="w-full h-full object-contain pointer-events-none"
-                                style={{ 
-                                  background: 'transparent',
-                                  mixBlendMode: 'multiply',
-                                  opacity: 1
-                                }}
-                                draggable={false}
-                              />
+                            {/* Placed Signatures Overlay - For non-PDF files (Word, Excel, Images) */}
+                            {/* PDFs render signatures per-page inside each page div above */}
+                            {fileContent?.type !== 'pdf' && (
+                              <>
+                                {console.log('🔍 Rendering signatures for non-PDF:', placedSignatures.length, 'signatures')}
+                                {placedSignatures.length > 0 && console.log('First signature position:', placedSignatures[0])}
+                                {placedSignatures.map((signature, index) => {
+                                  console.log(`Rendering signature ${index + 1}:`, { x: signature.x, y: signature.y, width: signature.width, height: signature.height });
+                                  return (
+                                    <div
+                                      key={signature.id}
+                                      className={`absolute cursor-pointer select-none transition-all duration-200 ${selectedSignatureId === signature.id ? 'ring-2 ring-blue-400/60 shadow-lg border-2 border-blue-500' : 'hover:shadow-sm border border-transparent'}`}
+                                      style={{
+                                        left: `${signature.x}px`,
+                                        top: `${signature.y}px`,
+                                        width: `${signature.width}px`,
+                                        height: `${signature.height}px`,
+                                        transform: `rotate(${signature.rotation}deg)`,
+                                        transformOrigin: 'center',
+                                        zIndex: selectedSignatureId === signature.id ? 100 : 50,
+                                        pointerEvents: 'auto',
+                                      }}
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        setSelectedSignatureId(signature.id);
+                                        console.log('Signature clicked:', signature.id);
+                                      }}
+                                      onMouseDown={(e) => handleSignatureMouseDown(e, signature.id)}
+                                    >
+                                      {/* Signature Image - Authentic ink absorption */}
+                                      <img
+                                        src={signature.data}
+                                        alt="Signature"
+                                        className="w-full h-full object-contain pointer-events-none"
+                                        style={{ 
+                                          background: 'transparent',
+                                          mixBlendMode: 'multiply',
+                                          opacity: 1
+                                        }}
+                                        draggable={false}
+                                      />
 
-                              {/* Control Buttons (when selected) */}
-                              {selectedSignatureId === signature.id && (
-                                <div className="absolute -top-10 left-0 right-0 flex justify-center gap-1 bg-white/95 backdrop-blur-sm rounded-t-lg border border-b-0 border-blue-500 p-1">
-                                  <Button
-                                    size="sm"
-                                    variant="ghost"
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      rotateSignature(signature.id);
-                                    }}
-                                    className="h-7 px-2"
-                                    title="Rotate 90°"
-                                  >
-                                    <RotateCcw className="w-4 h-4" />
-                                  </Button>
-                                  <Button
-                                    size="sm"
-                                    variant="ghost"
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      deleteSignature(signature.id);
-                                    }}
-                                    className="h-7 px-2 text-red-600 hover:text-red-700 hover:bg-red-50"
-                                    title="Delete"
-                                  >
-                                    <X className="w-4 h-4" />
-                                  </Button>
-                                  <div className="flex items-center px-2 text-xs text-gray-600">
-                                    <Move className="w-3 h-3 mr-1" />
-                                    Drag
-                                  </div>
-                                </div>
-                              )}
+                                      {/* Control Buttons (when selected) */}
+                                      {selectedSignatureId === signature.id && (
+                                        <div className="absolute -top-10 left-0 right-0 flex justify-center gap-1 bg-white/95 backdrop-blur-sm rounded-t-lg border border-b-0 border-blue-500 p-1">
+                                          <Button
+                                            size="sm"
+                                            variant="ghost"
+                                            onClick={(e) => {
+                                              e.stopPropagation();
+                                              rotateSignature(signature.id);
+                                            }}
+                                            className="h-7 px-2"
+                                            title="Rotate 90°"
+                                          >
+                                            <RotateCcw className="w-4 h-4" />
+                                          </Button>
+                                          <Button
+                                            size="sm"
+                                            variant="ghost"
+                                            onClick={(e) => {
+                                              e.stopPropagation();
+                                              deleteSignature(signature.id);
+                                            }}
+                                            className="h-7 px-2 text-red-600 hover:text-red-700 hover:bg-red-50"
+                                            title="Delete"
+                                          >
+                                            <X className="w-4 h-4" />
+                                          </Button>
+                                          <div className="flex items-center px-2 text-xs text-gray-600">
+                                            <Move className="w-3 h-3 mr-1" />
+                                            Drag
+                                          </div>
+                                        </div>
+                                      )}
 
-                              {/* Resize Corners (when selected) */}
-                              {selectedSignatureId === signature.id && (
-                                <>
-                                  {/* Top Left */}
-                                  <div
-                                    className="absolute -top-2 -left-2 w-4 h-4 bg-blue-500 rounded-full cursor-nwse-resize hover:bg-blue-600 border-2 border-white shadow-md"
-                                    onMouseDown={(e) => handleResizeMouseDown(e, signature.id, 'tl')}
-                                  />
-                                  {/* Top Right */}
-                                  <div
-                                    className="absolute -top-2 -right-2 w-4 h-4 bg-blue-500 rounded-full cursor-nesw-resize hover:bg-blue-600 border-2 border-white shadow-md"
-                                    onMouseDown={(e) => handleResizeMouseDown(e, signature.id, 'tr')}
-                                  />
-                                  {/* Bottom Left */}
-                                  <div
-                                    className="absolute -bottom-2 -left-2 w-4 h-4 bg-blue-500 rounded-full cursor-nesw-resize hover:bg-blue-600 border-2 border-white shadow-md"
-                                    onMouseDown={(e) => handleResizeMouseDown(e, signature.id, 'bl')}
-                                  />
-                                  {/* Bottom Right */}
-                                  <div
-                                    className="absolute -bottom-2 -right-2 w-4 h-4 bg-blue-500 rounded-full cursor-nwse-resize hover:bg-blue-600 border-2 border-white shadow-md"
-                                    onMouseDown={(e) => handleResizeMouseDown(e, signature.id, 'br')}
-                                  />
-                                </>
-                              )}
-                            </div>
-                          ))}
+                                      {/* Resize Corners (when selected) */}
+                                      {selectedSignatureId === signature.id && (
+                                        <>
+                                          {/* Top Left */}
+                                          <div
+                                            className="absolute -top-2 -left-2 w-4 h-4 bg-blue-500 rounded-full cursor-nwse-resize hover:bg-blue-600 border-2 border-white shadow-md"
+                                            onMouseDown={(e) => handleResizeMouseDown(e, signature.id, 'tl')}
+                                          />
+                                          {/* Top Right */}
+                                          <div
+                                            className="absolute -top-2 -right-2 w-4 h-4 bg-blue-500 rounded-full cursor-nesw-resize hover:bg-blue-600 border-2 border-white shadow-md"
+                                            onMouseDown={(e) => handleResizeMouseDown(e, signature.id, 'tr')}
+                                          />
+                                          {/* Bottom Left */}
+                                          <div
+                                            className="absolute -bottom-2 -left-2 w-4 h-4 bg-blue-500 rounded-full cursor-nesw-resize hover:bg-blue-600 border-2 border-white shadow-md"
+                                            onMouseDown={(e) => handleResizeMouseDown(e, signature.id, 'bl')}
+                                          />
+                                          {/* Bottom Right */}
+                                          <div
+                                            className="absolute -bottom-2 -right-2 w-4 h-4 bg-blue-500 rounded-full cursor-nwse-resize hover:bg-blue-600 border-2 border-white shadow-md"
+                                            onMouseDown={(e) => handleResizeMouseDown(e, signature.id, 'br')}
+                                          />
+                                        </>
+                                      )}
+                                    </div>
+                                  );
+                                })}
+                              </>
+                            )}
                           </div>
                         </div>
                       ) : (

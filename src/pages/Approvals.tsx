@@ -951,10 +951,68 @@ const Approvals = () => {
     };
   }, []);
   
-  // Save approval history to localStorage whenever it changes
+  // Listen for document signature events
   useEffect(() => {
-    localStorage.setItem('approval-history-new', JSON.stringify(approvalHistory));
-  }, [approvalHistory]);
+    const handleDocumentSigned = (event: any) => {
+      console.log('🖊️ [Approval Center] Document signed event received:', event.detail);
+      
+      // Reload pending approvals to show updated signed files
+      const stored = JSON.parse(localStorage.getItem('pending-approvals') || '[]');
+      setPendingApprovals(stored);
+      
+      if (event.detail?.documentId) {
+        toast({
+          title: "Document Signed",
+          description: `Document has been digitally signed and updated`,
+          duration: 3000,
+        });
+      }
+    };
+    
+    window.addEventListener('document-signed', handleDocumentSigned);
+    
+    return () => {
+      window.removeEventListener('document-signed', handleDocumentSigned);
+    };
+  }, [toast]);
+  
+  // Save approval history to localStorage whenever it changes (with quota management)
+  useEffect(() => {
+    try {
+      // Keep only the last 50 approval history items to prevent quota issues
+      const limitedHistory = approvalHistory.slice(0, 50);
+      
+      // Remove large file data from history to save space
+      const compactHistory = limitedHistory.map(item => ({
+        ...item,
+        files: undefined, // Don't store full files in history
+        description: item.description?.substring(0, 200) // Limit description length
+      }));
+      
+      localStorage.setItem('approval-history-new', JSON.stringify(compactHistory));
+      console.log('💾 Saved approval history:', compactHistory.length, 'items');
+    } catch (quotaError) {
+      console.error('⚠️ LocalStorage quota exceeded for approval history:', quotaError);
+      // Clear old history and try again
+      try {
+        const recentHistory = approvalHistory.slice(0, 20).map(item => ({
+          id: item.id,
+          title: item.title,
+          status: item.status,
+          approvedBy: item.approvedBy,
+          approvedDate: item.approvedDate
+        }));
+        localStorage.setItem('approval-history-new', JSON.stringify(recentHistory));
+        toast({
+          title: "Storage Optimized",
+          description: "Cleared old approval history to free up space",
+          duration: 3000,
+        });
+      } catch (e) {
+        console.error('Failed to save even compact history:', e);
+      }
+    }
+  }, [approvalHistory, toast]);
   
   // Handle Documenso completion
   const handleDocumensoComplete = (docId: string) => {

@@ -487,6 +487,9 @@ export const FileViewer: React.FC<FileViewerProps> = ({ file, files, open, onOpe
       return null;
     }
 
+    // Check if file has signature metadata attached
+    const signatureMetadata = currentFile ? (currentFile as any).signatureMetadata : null;
+
     switch (fileType) {
       case 'pdf':
         return (
@@ -508,6 +511,47 @@ export const FileViewer: React.FC<FileViewerProps> = ({ file, files, open, onOpe
                 <Badge variant="secondary" className="absolute top-2 right-2 bg-background/95 backdrop-blur">
                   Page {index + 1}
                 </Badge>
+                
+                {/* Render signatures if metadata exists */}
+                {signatureMetadata && signatureMetadata.length > 0 && (
+                  <div 
+                    className="absolute inset-0 pointer-events-none"
+                    style={{ 
+                      transform: `scale(${zoom / 100}) rotate(${rotation}deg)`,
+                      transformOrigin: 'center',
+                    }}
+                  >
+                    {signatureMetadata
+                      .filter((sig: any) => !sig.pageNumber || sig.pageNumber === index + 1)
+                      .map((signature: any) => (
+                        <div
+                          key={signature.id}
+                          className="absolute"
+                          style={{
+                            left: `${signature.x}px`,
+                            top: `${signature.y}px`,
+                            width: `${signature.width}px`,
+                            height: `${signature.height}px`,
+                            transform: `rotate(${signature.rotation}deg)`,
+                            transformOrigin: 'center',
+                          }}
+                        >
+                          <img
+                            src={signature.data}
+                            alt="Signature"
+                            className="w-full h-full object-contain"
+                            style={{ 
+                              background: 'transparent',
+                              mixBlendMode: 'multiply',
+                              opacity: 1
+                            }}
+                            draggable={false}
+                          />
+                        </div>
+                      ))
+                    }
+                  </div>
+                )}
               </div>
             ))}
             {content && content.totalPages > 1 && (
@@ -521,15 +565,56 @@ export const FileViewer: React.FC<FileViewerProps> = ({ file, files, open, onOpe
       case 'word':
         return (
           <div className="w-full max-w-4xl mx-auto">
-            <div 
-              className="prose prose-sm max-w-none p-6 bg-white rounded shadow-sm"
-              style={{ 
-                zoom: `${zoom}%`,
-                transform: `rotate(${rotation}deg)`,
-                transformOrigin: 'top center',
-              }}
-              dangerouslySetInnerHTML={{ __html: content.html }}
-            />
+            <div className="relative">
+              <div 
+                className="prose prose-sm max-w-none p-6 bg-white rounded shadow-sm"
+                style={{ 
+                  zoom: `${zoom}%`,
+                  transform: `rotate(${rotation}deg)`,
+                  transformOrigin: 'top center',
+                }}
+                dangerouslySetInnerHTML={{ __html: content.html }}
+              />
+              
+              {/* Render signatures if metadata exists */}
+              {signatureMetadata && signatureMetadata.length > 0 && (
+                <div 
+                  className="absolute inset-0 pointer-events-none"
+                  style={{ 
+                    zoom: `${zoom}%`,
+                    transform: `rotate(${rotation}deg)`,
+                    transformOrigin: 'top center',
+                  }}
+                >
+                  {signatureMetadata.map((signature: any) => (
+                    <div
+                      key={signature.id}
+                      className="absolute"
+                      style={{
+                        left: `${signature.x}px`,
+                        top: `${signature.y}px`,
+                        width: `${signature.width}px`,
+                        height: `${signature.height}px`,
+                        transform: `rotate(${signature.rotation}deg)`,
+                        transformOrigin: 'center',
+                      }}
+                    >
+                      <img
+                        src={signature.data}
+                        alt="Signature"
+                        className="w-full h-full object-contain"
+                        style={{ 
+                          background: 'transparent',
+                          mixBlendMode: 'multiply',
+                          opacity: 1
+                        }}
+                        draggable={false}
+                      />
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
         );
 
@@ -563,24 +648,64 @@ export const FileViewer: React.FC<FileViewerProps> = ({ file, files, open, onOpe
       case 'image':
         return (
           <div className="flex justify-center items-center py-4 min-h-[400px]">
-            <img 
-              src={content.url} 
-              alt={currentFile?.name || 'Image'}
-              style={{ 
-                maxWidth: '100%',
-                maxHeight: '80vh',
-                height: 'auto',
-                width: 'auto',
-                transform: `scale(${zoom / 100}) rotate(${rotation}deg)`,
-                transition: 'transform 0.3s ease',
-                transformOrigin: 'center',
-              }}
-              className="rounded shadow-lg"
-              onLoad={() => console.log('✅ Image rendered in viewer successfully')}
-              onError={(e) => {
-                console.error('❌ Image rendering in viewer failed:', e);
-              }}
-            />
+            <div className="relative inline-block">
+              <img 
+                src={content.url} 
+                alt={currentFile?.name || 'Image'}
+                style={{ 
+                  maxWidth: '100%',
+                  maxHeight: '80vh',
+                  height: 'auto',
+                  width: 'auto',
+                  transform: `scale(${zoom / 100}) rotate(${rotation}deg)`,
+                  transition: 'transform 0.3s ease',
+                  transformOrigin: 'center',
+                }}
+                className="rounded shadow-lg"
+                onLoad={() => console.log('✅ Image rendered in viewer successfully')}
+                onError={(e) => {
+                  console.error('❌ Image rendering in viewer failed:', e);
+                }}
+              />
+              
+              {/* Render signatures if metadata exists */}
+              {signatureMetadata && signatureMetadata.length > 0 && (
+                <div 
+                  className="absolute inset-0 pointer-events-none"
+                  style={{ 
+                    transform: `scale(${zoom / 100}) rotate(${rotation}deg)`,
+                    transformOrigin: 'center',
+                  }}
+                >
+                  {signatureMetadata.map((signature: any) => (
+                    <div
+                      key={signature.id}
+                      className="absolute"
+                      style={{
+                        left: `${signature.x}px`,
+                        top: `${signature.y}px`,
+                        width: `${signature.width}px`,
+                        height: `${signature.height}px`,
+                        transform: `rotate(${signature.rotation}deg)`,
+                        transformOrigin: 'center',
+                      }}
+                    >
+                      <img
+                        src={signature.data}
+                        alt="Signature"
+                        className="w-full h-full object-contain"
+                        style={{ 
+                          background: 'transparent',
+                          mixBlendMode: 'multiply',
+                          opacity: 1
+                        }}
+                        draggable={false}
+                      />
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
         );
 

@@ -26,6 +26,53 @@ import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
 
+// Clean up localStorage on app start to prevent quota issues
+const cleanupLocalStorage = () => {
+  try {
+    // Check localStorage size
+    let totalSize = 0;
+    for (let key in localStorage) {
+      if (localStorage.hasOwnProperty(key)) {
+        totalSize += localStorage[key].length + key.length;
+      }
+    }
+    
+    const sizeInMB = (totalSize / 1024 / 1024).toFixed(2);
+    console.log(`📊 LocalStorage size: ${sizeInMB} MB`);
+    
+    // If size > 4MB, clean up old data
+    if (totalSize > 4 * 1024 * 1024) {
+      console.log('🧹 Cleaning up localStorage...');
+      
+      // Keep only last 30 approval history items
+      try {
+        const history = JSON.parse(localStorage.getItem('approval-history-new') || '[]');
+        if (history.length > 30) {
+          localStorage.setItem('approval-history-new', JSON.stringify(history.slice(0, 30)));
+          console.log('✅ Trimmed approval history');
+        }
+      } catch (e) {
+        console.error('Failed to clean approval history:', e);
+      }
+      
+      // Remove old temporary data
+      const keysToCheck = ['temp-', 'cache-', 'preview-'];
+      for (let key in localStorage) {
+        if (keysToCheck.some(prefix => key.startsWith(prefix))) {
+          localStorage.removeItem(key);
+        }
+      }
+      
+      console.log('✅ LocalStorage cleanup complete');
+    }
+  } catch (error) {
+    console.error('LocalStorage cleanup error:', error);
+  }
+};
+
+// Run cleanup on app start
+cleanupLocalStorage();
+
 const App = () => (
   <ErrorBoundary>
     <QueryClientProvider client={queryClient}>
