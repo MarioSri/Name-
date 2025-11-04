@@ -4,6 +4,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { ExternalNotificationDispatcher } from "@/services/ExternalNotificationDispatcher";
+import { channelAutoCreationService } from "@/services/ChannelAutoCreationService";
 
 const Documents = () => {
   const { user, logout } = useAuth();
@@ -368,27 +369,36 @@ const Documents = () => {
     const totalNotified = Object.values(notificationResults).filter(r => r.success).length;
     console.log(`📬 Notification Summary: ${totalNotified} of ${allRecipientIds.length} recipients notified`);
     
-    // Create channel for document collaboration
-    const channelName = `${data.title.substring(0, 30)}${data.title.length > 30 ? '...' : ''}`;
-    const newChannel = {
-      id: `doc-${trackingCard.id}`,
-      name: channelName,
-      members: [user?.id, ...data.recipients],
-      isPrivate: true,
-      createdAt: new Date().toISOString(),
-      createdBy: user?.id,
-      documentId: trackingCard.id,
-      documentTitle: data.title
-    };
+    // 🆕 AUTO-CREATE CHANNEL using ChannelAutoCreationService
+    console.log('📢 Auto-creating channel for Document Management submission...');
     
-    // Save channel to localStorage
-    const existingChannels = JSON.parse(localStorage.getItem('document-channels') || '[]');
-    existingChannels.unshift(newChannel);
-    localStorage.setItem('document-channels', JSON.stringify(existingChannels));
+    try {
+      const recipientNames = data.recipients.map((id: string) => getRecipientName(id));
+      
+      const channel = channelAutoCreationService.createDocumentChannel({
+        documentId: trackingCard.id,
+        documentTitle: data.title,
+        submittedBy: user?.id || 'unknown',
+        submittedByName: currentUserName,
+        recipients: data.recipients,
+        recipientNames: recipientNames,
+        source: 'Document Management',
+        submittedAt: new Date()
+      });
+      
+      console.log('✅ Channel auto-created:', {
+        channelId: channel.id,
+        channelName: channel.name,
+        members: channel.members.length,
+        documentId: channel.documentId
+      });
+    } catch (error) {
+      console.error('❌ Failed to auto-create channel:', error);
+    }
     
     toast({
       title: "Document Submitted",
-      description: `Your document has been submitted to ${data.recipients.length} recipient(s) and is now being tracked. A collaboration channel has been created.`,
+      description: `Your document has been submitted to ${data.recipients.length} recipient(s) and is now being tracked. A collaboration channel has been created in Department Chat.`,
     });
   };
 

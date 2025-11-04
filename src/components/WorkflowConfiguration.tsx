@@ -15,6 +15,7 @@ import { RecipientSelector } from '@/components/RecipientSelector';
 import { LoadingState } from '@/components/ui/loading-states';
 import { BiDirectionalWorkflowEngine } from '@/services/BiDirectionalWorkflowEngine';
 import { WorkflowRoute, WorkflowStep } from '@/types/workflow';
+import { channelAutoCreationService } from '@/services/ChannelAutoCreationService';
 import { cn } from '@/lib/utils';
 import {
   Settings,
@@ -306,11 +307,11 @@ export const WorkflowConfiguration: React.FC<WorkflowConfigurationProps> = ({ cl
                  documentPriority === 'medium' ? 'Medium Priority' :
                  documentPriority === 'high' ? 'High Priority' : 'Urgent Priority',
         workflow: {
-          currentStep: 'Complete',
-          progress: 100,
+          currentStep: selectedRecipients.length > 0 ? 'Pending Approval' : 'Complete',
+          progress: 0,
           steps: [
             { name: 'Submission', status: 'completed', assignee: currentUserName, completedDate: new Date().toISOString().split('T')[0] },
-            { name: 'Bypass Approval', status: 'completed', assignee: 'System', completedDate: new Date().toISOString().split('T')[0] }
+            ...(selectedRecipients.length > 0 ? [{ name: 'Pending Approval', status: 'current', assignee: 'Recipients' }] : [{ name: 'Bypass Approval', status: 'completed', assignee: 'System', completedDate: new Date().toISOString().split('T')[0] }])
           ]
         },
         requiresSignature: true,
@@ -490,11 +491,38 @@ export const WorkflowConfiguration: React.FC<WorkflowConfigurationProps> = ({ cl
         window.dispatchEvent(new CustomEvent('document-approval-created', {
           detail: { approval: approvalCard }
         }));
+        
+        // 🆕 AUTO-CREATE CHANNEL using ChannelAutoCreationService
+        console.log('📢 Auto-creating channel for Approval Chain with Bypass submission...');
+        
+        try {
+          const recipientNames = selectedRecipients.map((id: string) => getRecipientName(id));
+          
+          const channel = channelAutoCreationService.createDocumentChannel({
+            documentId: trackingCard.id,
+            documentTitle: documentTitle,
+            submittedBy: user?.id || 'unknown',
+            submittedByName: currentUserName,
+            recipients: selectedRecipients,
+            recipientNames: recipientNames,
+            source: 'Approval Chain with Bypass',
+            submittedAt: new Date()
+          });
+          
+          console.log('✅ Channel auto-created:', {
+            channelId: channel.id,
+            channelName: channel.name,
+            members: channel.members.length,
+            documentId: channel.documentId
+          });
+        } catch (error) {
+          console.error('❌ Failed to auto-create channel:', error);
+        }
       }
       
       toast({
         title: "Bypass Document Submitted",
-        description: `Your document has been submitted with bypass approval and is now visible in Track Documents${selectedRecipients.length > 0 ? ' and Approval Center' : ''}.`,
+        description: `Your document has been submitted with bypass approval and is now visible in Track Documents${selectedRecipients.length > 0 ? ' and Approval Center. A collaboration channel has been created in Department Chat' : ''}.`,
       });
       
       // Reset form
@@ -1017,50 +1045,7 @@ export const WorkflowConfiguration: React.FC<WorkflowConfigurationProps> = ({ cl
                       </div>
                     )}
 
-                    {/* Auto-Escalation */}
-                    <div className="space-y-3">
-                      <div className="flex items-center space-x-2">
-                        <Switch
-                          checked={autoEscalation}
-                          onCheckedChange={setAutoEscalation}
-                        />
-                        <label className="text-sm font-medium">Auto-Escalation</label>
-                      </div>
-                      
-                      {autoEscalation && (
-                        <div className="grid grid-cols-2 gap-4">
-                          <div>
-                            <label className="text-sm font-medium">Escalation Timeout</label>
-                            <Input
-                              type="number"
-                              value={escalationTimeout}
-                              onChange={(e) => setEscalationTimeout(Number(e.target.value))}
-                              min={1}
-                              className="mt-1"
-                            />
-                          </div>
-                          <div>
-                            <label className="text-sm font-medium">Time Unit</label>
-                            <Select
-                              value={escalationTimeUnit}
-                              onValueChange={(value: any) => setEscalationTimeUnit(value)}
-                            >
-                              <SelectTrigger className="mt-1">
-                                <SelectValue />
-                              </SelectTrigger>
-                              <SelectContent>
-                                <SelectItem value="seconds">Seconds</SelectItem>
-                                <SelectItem value="minutes">Minutes</SelectItem>
-                                <SelectItem value="hours">Hours</SelectItem>
-                                <SelectItem value="days">Days</SelectItem>
-                                <SelectItem value="weeks">Weeks</SelectItem>
-                                <SelectItem value="months">Months</SelectItem>
-                              </SelectContent>
-                            </Select>
-                          </div>
-                        </div>
-                      )}
-                    </div>
+
 
                     {/* Recipients */}
                     <div>

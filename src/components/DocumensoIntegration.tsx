@@ -510,14 +510,10 @@ export const DocumensoIntegration: React.FC<DocumensoIntegrationProps> = ({
       setIsCompleted(true);
       setIsProcessing(false);
       
-      // Complete the signing process
-      setTimeout(() => {
-        onComplete();
-        toast({
-          title: "Document Signed Successfully",
-          description: `${document.title} has been digitally signed and updated in Track Documents and Approval Center.`,
-        });
-      }, 1500);
+      toast({
+        title: "Document Signed Successfully",
+        description: `${document.title} has been digitally signed and updated in Track Documents and Approval Center.`,
+      });
       
     } catch (error) {
       console.error('❌ Signature merge failed:', error);

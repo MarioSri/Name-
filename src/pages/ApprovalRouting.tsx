@@ -74,7 +74,7 @@ const ApprovalRouting: React.FC = () => {
     {
       icon: Clock,
       title: 'Auto-Escalation',
-      description: 'Automatic escalation to higher authorities when approvals exceed configured timeouts',
+      description: 'Smart escalation system: timeout-based escalation cycles through recipients and returns to original approver, rejection-based escalation (2+ rejections) moves to higher authority, single rejection stops the process',
       color: 'text-orange-500'
     },
     {

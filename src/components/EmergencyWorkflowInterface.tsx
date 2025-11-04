@@ -48,6 +48,7 @@ import { useToast } from "@/hooks/use-toast";
 import { WatermarkFeature } from "@/components/WatermarkFeature";
 import { useAuth } from "@/contexts/AuthContext";
 import { Siren as SirenIcon } from "lucide-react";
+import { channelAutoCreationService } from "@/services/ChannelAutoCreationService";
 import { FileViewer } from "@/components/FileViewer";
 import { NotificationBehaviorPreview } from "@/components/NotificationBehaviorPreview";
 import type { EmergencyNotificationSettings } from "@/services/EmergencyNotificationService";
@@ -173,7 +174,8 @@ export const EmergencyWorkflowInterface: React.FC<EmergencyWorkflowInterfaceProp
     autoEscalation: false,
     escalationTimeout: 24,
     escalationTimeUnit: 'hours' as 'seconds' | 'minutes' | 'hours' | 'days' | 'weeks' | 'months',
-    cyclicEscalation: true
+    cyclicEscalation: true,
+    bypassMode: false
   });
   const [useProfileDefaults, setUseProfileDefaults] = useState(true);
   const [overrideNotifications, setOverrideNotifications] = useState(false);
@@ -576,13 +578,40 @@ export const EmergencyWorkflowInterface: React.FC<EmergencyWorkflowInterfaceProp
       key: 'submitted-documents',
       newValue: JSON.stringify(existingDocs)
     }));
+    
+    // 🆕 AUTO-CREATE CHANNEL using ChannelAutoCreationService
+    console.log('📢 Auto-creating channel for Emergency Management submission...');
+    
+    try {
+      const recipientNames = selectedRecipients.map(id => getRecipientName(id));
+      
+      const channel = channelAutoCreationService.createDocumentChannel({
+        documentId: trackingCard.id,
+        documentTitle: emergencyData.title,
+        submittedBy: user?.id || 'unknown',
+        submittedByName: user?.name || userRole,
+        recipients: selectedRecipients,
+        recipientNames: recipientNames,
+        source: 'Emergency Management',
+        submittedAt: new Date()
+      });
+      
+      console.log('✅ Channel auto-created:', {
+        channelId: channel.id,
+        channelName: channel.name,
+        members: channel.members.length,
+        documentId: channel.documentId
+      });
+    } catch (error) {
+      console.error('❌ Failed to auto-create channel:', error);
+    }
 
     // Reset form and show success
     resetEmergencyForm();
     
     toast({
       title: "EMERGENCY SUBMITTED",
-      description: `Emergency document created and sent to ${selectedRecipients.length} recipients`,
+      description: `Emergency document created and sent to ${selectedRecipients.length} recipients. A collaboration channel has been created in Department Chat.`,
       duration: 5000,
     });
   };
@@ -599,7 +628,8 @@ export const EmergencyWorkflowInterface: React.FC<EmergencyWorkflowInterfaceProp
       autoEscalation: false,
       escalationTimeout: 24,
       escalationTimeUnit: 'hours' as 'seconds' | 'minutes' | 'hours' | 'days' | 'weeks' | 'months',
-      cyclicEscalation: true
+      cyclicEscalation: true,
+      bypassMode: false
     });
     setSelectedRecipients([]);
     setUseSmartDelivery(false);
@@ -1392,6 +1422,35 @@ export const EmergencyWorkflowInterface: React.FC<EmergencyWorkflowInterfaceProp
                       </div>
                     </div>
 
+                    {/* Smart Recipient Delivery with Bypass Option */}
+                    <div className="space-y-3 p-3 border-2 border-orange-200 rounded-lg bg-orange-50">
+                      <div className="flex items-center gap-2">
+                        <Shield className="w-5 h-5 text-orange-600" />
+                        <Label className="text-base font-medium text-orange-800">
+                          Smart Recipient Delivery With ByPass Option
+                        </Label>
+                      </div>
+                      <div className="text-sm text-orange-700 bg-orange-100 p-3 rounded-md">
+                        <p className="font-medium mb-1">Enhanced Emergency Delivery:</p>
+                        <p className="mb-2">This advanced option bypasses normal approval workflows and delivers emergency documents directly to all selected recipients instantly. When rejections occur, the system automatically bypasses to the next selected recipients, ensuring critical information reaches everyone without any procedural delays.</p>
+                      </div>
+                      <div className="flex items-center justify-between p-2 bg-white rounded border">
+                        <div className="flex items-center gap-2">
+                          <Zap className="w-4 h-4 text-orange-600" />
+                          <span className="text-sm font-medium">Enable Bypass Mode</span>
+                        </div>
+                        <Switch
+                          checked={emergencyData.bypassMode || false}
+                          onCheckedChange={(checked) => setEmergencyData({...emergencyData, bypassMode: checked})}
+                        />
+                      </div>
+                      {emergencyData.bypassMode && (
+                        <div className="text-xs text-orange-600 bg-orange-100 p-2 rounded flex items-center gap-2">
+                          <AlertTriangle className="w-4 h-4" />
+                          <span>Bypass mode active - Documents will be delivered instantly without approval workflow</span>
+                        </div>
+                      )}
+                    </div>
                   </>
                 )}
               </div>

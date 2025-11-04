@@ -1985,44 +1985,144 @@ Generated on: ${new Date().toLocaleString()}`;
               View Members in Channel Group
             </AlertDialogTitle>
             <AlertDialogDescription>
-              {selectedChannelForMembers?.name} • Total Members: 5
+              {selectedChannelForMembers?.name} • Total Members: {selectedChannelForMembers?.members?.length || 0}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <div className="space-y-4">
             <div>
               <label className="text-sm font-medium mb-2 block">Channel Group Members</label>
               <ScrollArea className="h-64 border rounded-md p-2">
-                {[
-                  { id: 'principal', fullName: 'Dr. Principal', role: 'Principal', isOnline: true },
-                  { id: 'registrar', fullName: 'Prof. Registrar', role: 'Registrar', isOnline: true },
-                  { id: 'dean', fullName: 'Dr. Dean', role: 'Dean', isOnline: false },
-                  { id: 'hod-cse', fullName: 'Dr. HOD-CSE', role: 'HOD', isOnline: true },
-                  { id: 'hod-eee', fullName: 'Dr. HOD-EEE', role: 'HOD', isOnline: false }
-                ].map((member) => (
-                  <div key={member.id} className="flex items-center justify-between p-2 hover:bg-accent rounded-md">
-                    <div className="flex items-center gap-2">
-                      <div className="relative">
-                        <Avatar className="w-8 h-8">
-                          <AvatarFallback className="text-xs">
-                            {member.fullName.split(' ').map(n => n[0]).join('').toUpperCase()}
-                          </AvatarFallback>
-                        </Avatar>
-                        <div className={`absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full border-2 border-white ${
-                          member.isOnline ? 'bg-green-500' : 'bg-gray-400'
-                        }`} />
+                {selectedChannelForMembers?.members?.map((memberId) => {
+                  // Helper function to get user display info from member ID
+                  const getMemberInfo = (id: string) => {
+                    // Map of common recipient IDs to their display names
+                    const recipientMap: { [key: string]: { fullName: string; role: string } } = {
+                      // Leadership
+                      'principal-dr.-robert-principal': { fullName: 'Dr. Robert Principal', role: 'Principal' },
+                      'registrar-prof.-sarah-registrar': { fullName: 'Prof. Sarah Registrar', role: 'Registrar' },
+                      'dean-dr.-maria-dean': { fullName: 'Dr. Maria Dean', role: 'Dean' },
+                      'chairman-mr.-david-chairman': { fullName: 'Mr. David Chairman', role: 'Chairman' },
+                      'director-(for-information)-ms.-lisa-director': { fullName: 'Ms. Lisa Director', role: 'Director' },
+                      'leadership-prof.-leadership-officer': { fullName: 'Prof. Leadership Officer', role: 'Leadership' },
+                      
+                      // CDC Employees
+                      'cdc-head-dr.-cdc-head': { fullName: 'Dr. CDC Head', role: 'CDC Head' },
+                      'cdc-coordinator-prof.-cdc-coordinator': { fullName: 'Prof. CDC Coordinator', role: 'CDC Coordinator' },
+                      'cdc-executive-ms.-cdc-executive': { fullName: 'Ms. CDC Executive', role: 'CDC Executive' },
+                      
+                      // Administrative
+                      'controller-of-examinations-dr.-robert-controller': { fullName: 'Dr. Robert Controller', role: 'Controller' },
+                      'asst.-dean-iiic-prof.-asst-dean': { fullName: 'Prof. Asst Dean', role: 'Asst. Dean IIIC' },
+                      'head-operations-mr.-michael-operations': { fullName: 'Mr. Michael Operations', role: 'Head Operations' },
+                      'librarian-ms.-jennifer-librarian': { fullName: 'Ms. Jennifer Librarian', role: 'Librarian' },
+                      'ssg-prof.-william-ssg': { fullName: 'Prof. William SSG', role: 'SSG' },
+                      
+                      // HODs
+                      'hod-dr.-eee-hod-eee': { fullName: 'Dr. EEE HOD', role: 'HOD EEE' },
+                      'hod-dr.-mech-hod-mech': { fullName: 'Dr. MECH HOD', role: 'HOD MECH' },
+                      'hod-dr.-cse-hod-cse': { fullName: 'Dr. CSE HOD', role: 'HOD CSE' },
+                      'hod-dr.-ece-hod-ece': { fullName: 'Dr. ECE HOD', role: 'HOD ECE' },
+                      'hod-dr.-csm-hod-csm': { fullName: 'Dr. CSM HOD', role: 'HOD CSM' },
+                      'hod-dr.-cso-hod-cso': { fullName: 'Dr. CSO HOD', role: 'HOD CSO' },
+                      'hod-dr.-csd-hod-csd': { fullName: 'Dr. CSD HOD', role: 'HOD CSD' },
+                      'hod-dr.-csc-hod-csc': { fullName: 'Dr. CSC HOD', role: 'HOD CSC' },
+                      
+                      // Program Department Heads
+                      'program-department-head-prof.-eee-head-eee': { fullName: 'Prof. EEE Head', role: 'Program Head EEE' },
+                      'program-department-head-prof.-mech-head-mech': { fullName: 'Prof. MECH Head', role: 'Program Head MECH' },
+                      'program-department-head-prof.-cse-head-cse': { fullName: 'Prof. CSE Head', role: 'Program Head CSE' },
+                      'program-department-head-prof.-ece-head-ece': { fullName: 'Prof. ECE Head', role: 'Program Head ECE' },
+                      'program-department-head-prof.-csm-head-csm': { fullName: 'Prof. CSM Head', role: 'Program Head CSM' },
+                      'program-department-head-prof.-cso-head-cso': { fullName: 'Prof. CSO Head', role: 'Program Head CSO' },
+                      'program-department-head-prof.-csd-head-csd': { fullName: 'Prof. CSD Head', role: 'Program Head CSD' },
+                      'program-department-head-prof.-csc-head-csc': { fullName: 'Prof. CSC Head', role: 'Program Head CSC' }
+                    };
+                    
+                    // Check if we have a mapping
+                    if (recipientMap[id]) {
+                      return recipientMap[id];
+                    }
+                    
+                    // Check if it's the current user
+                    if (id === user?.id || id === user?.name) {
+                      return { fullName: user?.name || 'You', role: user?.role || 'User' };
+                    }
+                    
+                    // Try to extract name from ID
+                    const parts = id.split('-');
+                    let name = '';
+                    let role = '';
+                    
+                    for (let i = 0; i < parts.length; i++) {
+                      if (parts[i].match(/^(dr\.|prof\.|mr\.|ms\.)$/i)) {
+                        name = parts.slice(i).join(' ').replace(/-/g, ' ')
+                                  .split(' ')
+                                  .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+                                  .join(' ');
+                        break;
+                      }
+                    }
+                    
+                    // Extract role
+                    if (id.includes('hod')) role = 'HOD';
+                    else if (id.includes('principal')) role = 'Principal';
+                    else if (id.includes('registrar')) role = 'Registrar';
+                    else if (id.includes('dean')) role = 'Dean';
+                    else if (id.includes('program-department-head')) role = 'Program Head';
+                    else if (id.includes('faculty')) role = 'Faculty';
+                    else if (id.includes('employee')) role = 'Employee';
+                    else role = 'Member';
+                    
+                    if (!name) {
+                      name = id.replace(/-/g, ' ')
+                                .split(' ')
+                                .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+                                .join(' ');
+                    }
+                    
+                    return { fullName: name, role: role };
+                  };
+                  
+                  const memberInfo = getMemberInfo(memberId);
+                  const isCurrentUser = memberId === user?.id || memberId === user?.name;
+                  const isAdmin = selectedChannelForMembers?.admins?.includes(memberId);
+                  
+                  return (
+                    <div key={memberId} className="flex items-center justify-between p-2 hover:bg-accent rounded-md">
+                      <div className="flex items-center gap-2">
+                        <div className="relative">
+                          <Avatar className="w-8 h-8">
+                            <AvatarFallback className="text-xs">
+                              {memberInfo.fullName.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2)}
+                            </AvatarFallback>
+                          </Avatar>
+                          <div className="absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full border-2 border-white bg-gray-400" />
+                        </div>
+                        <div>
+                          <p className="text-sm font-medium">
+                            {memberInfo.fullName}
+                            {isCurrentUser && <span className="ml-1 text-xs text-muted-foreground">(You)</span>}
+                          </p>
+                          <p className="text-xs text-muted-foreground">
+                            {memberInfo.role}
+                          </p>
+                        </div>
                       </div>
-                      <div>
-                        <p className="text-sm font-medium">{member.fullName}</p>
-                        <p className="text-xs text-muted-foreground">
-                          {member.role}
-                        </p>
+                      <div className="flex items-center gap-2">
+                        {isAdmin && (
+                          <Badge variant="outline" className="text-xs">
+                            Admin
+                          </Badge>
+                        )}
+                        {selectedChannelForMembers?.createdBy === memberId && (
+                          <Badge variant="secondary" className="text-xs">
+                            Creator
+                          </Badge>
+                        )}
                       </div>
                     </div>
-                    <Badge variant={member.isOnline ? "default" : "secondary"} className="text-xs">
-                      {member.isOnline ? 'Online' : 'Offline'}
-                    </Badge>
-                  </div>
-                ))}
+                  );
+                })}
               </ScrollArea>
             </div>
           </div>
