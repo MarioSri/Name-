@@ -153,6 +153,8 @@ export const DocumensoIntegration: React.FC<DocumensoIntegrationProps> = ({
       return;
     }
 
+    console.log('📄 Loading file:', currentFile.name, 'Index:', currentFileIndex);
+
     const loadFile = async () => {
       setFileLoading(true);
       setFileError(null);
@@ -190,17 +192,23 @@ export const DocumensoIntegration: React.FC<DocumensoIntegrationProps> = ({
   // Multi-file navigation handlers
   const handlePreviousFile = () => {
     if (isMultiFile && currentFileIndex > 0) {
+      console.log('📂 Navigating to previous file:', currentFileIndex - 1);
       setCurrentFileIndex(prev => prev - 1);
       setFileZoom(100);
       setFileRotation(0);
+      setCurrentPageNumber(1); // Reset to page 1 when switching files
+      setSelectedSignatureId(null); // Deselect any selected signatures
     }
   };
 
   const handleNextFile = () => {
     if (isMultiFile && files && currentFileIndex < files.length - 1) {
+      console.log('📂 Navigating to next file:', currentFileIndex + 1);
       setCurrentFileIndex(prev => prev + 1);
       setFileZoom(100);
       setFileRotation(0);
+      setCurrentPageNumber(1); // Reset to page 1 when switching files
+      setSelectedSignatureId(null); // Deselect any selected signatures
     }
   };
 
@@ -1259,9 +1267,18 @@ export const DocumensoIntegration: React.FC<DocumensoIntegrationProps> = ({
                     </div>
                   )}
                 </CardTitle>
+                {/* Current File Name Display */}
+                {currentFile && (
+                  <div className="px-4 pb-2">
+                    <Badge variant="outline" className="text-xs max-w-full truncate">
+                      <FileText className="w-3 h-3 mr-1 inline" />
+                      {currentFile.name}
+                    </Badge>
+                  </div>
+                )}
               </CardHeader>
               <CardContent className="flex-1 flex flex-col overflow-hidden p-0">
-                {file ? (
+                {currentFile ? (
                   <div className="h-full flex flex-col">
 
 
@@ -1502,7 +1519,7 @@ export const DocumensoIntegration: React.FC<DocumensoIntegrationProps> = ({
                               <div className="flex justify-center">
                                 <img
                                   src={fileContent.url}
-                                  alt={file.name}
+                                  alt={currentFile.name}
                                   style={{
                                     maxWidth: '100%',
                                     height: 'auto',
