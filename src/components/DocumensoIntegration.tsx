@@ -83,24 +83,30 @@ export const DocumensoIntegration: React.FC<DocumensoIntegrationProps> = ({
   const isMultiFile = files && files.length > 1;
   const currentFile = isMultiFile ? files[currentFileIndex] : file;
   
-  // Signature placement on document
+  // Signature placement on document - Using NORMALIZED coordinates (0-1 range) for accuracy
   const [placedSignatures, setPlacedSignatures] = useState<Array<{
     id: string;
     data: string;
-    x: number;
-    y: number;
-    width: number;
-    height: number;
-    rotation: number;
-    pageNumber?: number; // Track which page this signature belongs to (1-based index, undefined for single-page docs)
-    previewWidth?: number;  // Store preview dimensions for scale calculation
-    previewHeight?: number;
+    // Normalized coordinates (0-1 range) - independent of zoom/screen size
+    xPercent: number;      // X position as percentage of document width (0-1)
+    yPercent: number;      // Y position as percentage of document height (0-1)
+    widthPercent: number;  // Width as percentage of document width (0-1)
+    heightPercent: number; // Height as percentage of document height (0-1)
+    rotation: number;      // Rotation in degrees
+    pageNumber?: number;   // Page number for multi-page PDFs (1-based, undefined = single-page/non-PDF)
+    fileIndex?: number;    // File index for multi-file documents (0-based)
+    // Store original document dimensions for reference
+    docWidth: number;      // Original document width at 100% zoom
+    docHeight: number;     // Original document height at 100% zoom
   }>>([]);
   const [selectedSignatureId, setSelectedSignatureId] = useState<string | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
   const [isResizing, setIsResizing] = useState(false);
   const [resizeCorner, setResizeCorner] = useState<'tl' | 'tr' | 'bl' | 'br' | null>(null);
+  
+  // Store actual document dimensions for accurate coordinate calculations
+  const [actualDocDimensions, setActualDocDimensions] = useState({ width: 800, height: 1200 });
   
   // Signature field state (the green box)
   const [signatureField, setSignatureField] = useState({
@@ -134,6 +140,49 @@ export const DocumensoIntegration: React.FC<DocumensoIntegrationProps> = ({
       setCurrentPageNumber(1); // Reset to page 1 when opening
     }
   }, [isOpen, files]);
+
+  // Calculate actual document dimensions when file content changes
+  React.useEffect(() => {
+    const calculateDimensions = async () => {
+      if (!fileContent) {
+        setActualDocDimensions({ width: 800, height: 1200 });
+        return;
+      }
+
+      try {
+        if (fileContent.type === 'pdf' && fileContent.pageCanvases && fileContent.pageCanvases.length > 0) {
+          // For PDFs, get dimensions from the first page canvas
+          const img = new Image();
+          await new Promise((resolve, reject) => {
+            img.onload = resolve;
+            img.onerror = reject;
+            img.src = fileContent.pageCanvases[0];
+          });
+          setActualDocDimensions({ width: img.width, height: img.height });
+          console.log('📐 PDF dimensions detected:', { width: img.width, height: img.height });
+        } else if (fileContent.type === 'image' && fileContent.url) {
+          // For images, use natural dimensions
+          const img = new Image();
+          await new Promise((resolve, reject) => {
+            img.onload = resolve;
+            img.onerror = reject;
+            img.src = fileContent.url;
+          });
+          setActualDocDimensions({ width: img.naturalWidth, height: img.naturalHeight });
+          console.log('📐 Image dimensions detected:', { width: img.naturalWidth, height: img.naturalHeight });
+        } else if (fileContent.type === 'word' || fileContent.type === 'excel') {
+          // For Word/Excel, use fixed A4 proportions
+          setActualDocDimensions({ width: 1200, height: 1600 });
+          console.log('📐 Word/Excel dimensions set to A4:', { width: 1200, height: 1600 });
+        }
+      } catch (error) {
+        console.error('Error calculating document dimensions:', error);
+        setActualDocDimensions({ width: 800, height: 1200 });
+      }
+    };
+
+    calculateDimensions();
+  }, [fileContent, currentPageNumber]);
 
   // Scroll to current page when page number changes (for multi-page PDFs)
   React.useEffect(() => {
@@ -310,30 +359,32 @@ export const DocumensoIntegration: React.FC<DocumensoIntegrationProps> = ({
         canvas.height = pageImg.height;
         ctx.drawImage(pageImg, 0, 0);
 
-        // Draw ONLY signatures that belong to THIS specific page
-        const pageSignatures = placedSignatures.filter(sig => sig.pageNumber === currentPageNum);
+        // Draw ONLY signatures that belong to THIS specific page AND current file
+        const pageSignatures = placedSignatures.filter(sig => 
+          sig.pageNumber === currentPageNum && 
+          (sig.fileIndex === undefined || sig.fileIndex === currentFileIndex)
+        );
         
-        console.log(`📄 Processing page ${currentPageNum}: ${pageSignatures.length} signature(s) to merge`);
+        console.log(`📄 Processing PDF page ${currentPageNum}: ${pageSignatures.length} signature(s) to merge`);
         
         for (const signature of pageSignatures) {
-          // Calculate scale ratio between preview and actual canvas
-          const previewWidth = signature.previewWidth || 800;
-          const previewHeight = signature.previewHeight || 600;
-          const scaleX = canvas.width / previewWidth;
-          const scaleY = canvas.height / previewHeight;
+          // ✅ Use NORMALIZED coordinates (0-1 range) - multiply by actual canvas dimensions
+          // This ensures signatures appear in EXACT same position regardless of zoom/screen size
+          const canvasX = signature.xPercent * canvas.width;
+          const canvasY = signature.yPercent * canvas.height;
+          const canvasWidth = signature.widthPercent * canvas.width;
+          const canvasHeight = signature.heightPercent * canvas.height;
           
-          // Map preview coordinates to canvas coordinates
-          const canvasX = signature.x * scaleX;
-          const canvasY = signature.y * scaleY;
-          const canvasWidth = signature.width * scaleX;
-          const canvasHeight = signature.height * scaleY;
-          
-          console.log('📐 PDF Signature scale mapping:', {
-            preview: { x: signature.x, y: signature.y, w: signature.width, h: signature.height },
+          console.log('📐 PDF Signature NORMALIZED positioning:', {
+            normalized: { 
+              xPercent: signature.xPercent, 
+              yPercent: signature.yPercent, 
+              wPercent: signature.widthPercent, 
+              hPercent: signature.heightPercent 
+            },
             canvas: { x: canvasX, y: canvasY, w: canvasWidth, h: canvasHeight },
-            scale: { x: scaleX, y: scaleY },
             canvasSize: { w: canvas.width, h: canvas.height },
-            previewSize: { w: previewWidth, h: previewHeight }
+            docSize: { w: signature.docWidth, h: signature.docHeight }
           });
           
           const sigImg = new Image();
@@ -375,26 +426,30 @@ export const DocumensoIntegration: React.FC<DocumensoIntegrationProps> = ({
       canvas.height = img.height;
       ctx.drawImage(img, 0, 0);
 
-      // Draw all signatures
-      for (const signature of placedSignatures) {
-        // Calculate scale ratio between preview and actual canvas
-        const previewWidth = signature.previewWidth || 800;
-        const previewHeight = signature.previewHeight || 600;
-        const scaleX = canvas.width / previewWidth;
-        const scaleY = canvas.height / previewHeight;
+      // Draw signatures for this image file (filter by file index if multi-file)
+      const imageSignatures = placedSignatures.filter(sig => 
+        sig.fileIndex === undefined || sig.fileIndex === currentFileIndex
+      );
+      
+      console.log(`📷 Processing image file: ${imageSignatures.length} signature(s) to merge`);
+      
+      for (const signature of imageSignatures) {
+        // ✅ Use NORMALIZED coordinates (0-1 range) - multiply by actual canvas dimensions
+        const canvasX = signature.xPercent * canvas.width;
+        const canvasY = signature.yPercent * canvas.height;
+        const canvasWidth = signature.widthPercent * canvas.width;
+        const canvasHeight = signature.heightPercent * canvas.height;
         
-        // Map preview coordinates to canvas coordinates
-        const canvasX = signature.x * scaleX;
-        const canvasY = signature.y * scaleY;
-        const canvasWidth = signature.width * scaleX;
-        const canvasHeight = signature.height * scaleY;
-        
-        console.log('📐 Image Signature scale mapping:', {
-          preview: { x: signature.x, y: signature.y, w: signature.width, h: signature.height },
+        console.log('📐 Image Signature NORMALIZED positioning:', {
+          normalized: { 
+            xPercent: signature.xPercent, 
+            yPercent: signature.yPercent, 
+            wPercent: signature.widthPercent, 
+            hPercent: signature.heightPercent 
+          },
           canvas: { x: canvasX, y: canvasY, w: canvasWidth, h: canvasHeight },
-          scale: { x: scaleX, y: scaleY },
           canvasSize: { w: canvas.width, h: canvas.height },
-          previewSize: { w: previewWidth, h: previewHeight }
+          docSize: { w: signature.docWidth, h: signature.docHeight }
         });
         
         const sigImg = new Image();
@@ -456,14 +511,16 @@ export const DocumensoIntegration: React.FC<DocumensoIntegrationProps> = ({
         // Store signature metadata instead of full signed files to avoid quota issues
         const signatureMetadata = placedSignatures.map(sig => ({
           id: sig.id,
-          x: sig.x,
-          y: sig.y,
-          width: sig.width,
-          height: sig.height,
+          xPercent: sig.xPercent,
+          yPercent: sig.yPercent,
+          widthPercent: sig.widthPercent,
+          heightPercent: sig.heightPercent,
           rotation: sig.rotation,
           data: sig.data,
-          previewWidth: sig.previewWidth,
-          previewHeight: sig.previewHeight
+          docWidth: sig.docWidth,
+          docHeight: sig.docHeight,
+          pageNumber: sig.pageNumber,
+          fileIndex: sig.fileIndex
         }));
         
         // Update submitted-documents (Track Documents) - store metadata only
@@ -736,46 +793,68 @@ export const DocumensoIntegration: React.FC<DocumensoIntegrationProps> = ({
     });
   };
 
-  // Place signature on document preview - Inside signature field box
+  // Place signature on document preview - Using NORMALIZED coordinates for accuracy
   const placeSignatureOnDocument = (signatureData: string) => {
-    // Get preview container dimensions for scale calculation
-    const previewRect = previewContainerRef.current?.getBoundingClientRect();
-    const previewWidth = previewRect?.width || 800;
-    const previewHeight = previewRect?.height || 600;
+    // Use pre-calculated ACTUAL document dimensions (not preview container!)
+    const docWidth = actualDocDimensions.width;
+    const docHeight = actualDocDimensions.height;
     
-    // Determine page number for multi-page documents (PDFs)
+    console.log('📐 Using document dimensions:', { width: docWidth, height: docHeight });
+    
+    // Normalize coordinates to zoom level 100%
+    const zoomFactor = fileZoom / 100;
+    const normalizedX = signatureField.x / zoomFactor;
+    const normalizedY = signatureField.y / zoomFactor;
+    const normalizedWidth = signatureField.width / zoomFactor;
+    const normalizedHeight = signatureField.height / zoomFactor;
+    
+    // Convert to percentage-based coordinates (0-1 range)
+    const xPercent = normalizedX / docWidth;
+    const yPercent = normalizedY / docHeight;
+    const widthPercent = normalizedWidth / docWidth;
+    const heightPercent = normalizedHeight / docHeight;
+    
+    // Determine page number for multi-page documents (PDFs only)
     const pageNumber = fileContent?.type === 'pdf' && fileContent?.totalPages > 1 
       ? currentPageNumber 
-      : undefined; // undefined for single-page documents
+      : undefined;
     
     const newPlacedSignature = {
       id: Date.now().toString(),
       data: signatureData,
-      x: signatureField.x, // Use signature field position
-      y: signatureField.y,
-      width: signatureField.width, // Use signature field size
-      height: signatureField.height,
-      rotation: signatureField.rotation, // Match field rotation
-      pageNumber: pageNumber, // Track which page this signature belongs to
-      previewWidth: previewWidth, // Store for scale calculation during merge
-      previewHeight: previewHeight
+      // Store NORMALIZED coordinates (0-1 range) - resolution independent!
+      xPercent: xPercent,
+      yPercent: yPercent,
+      widthPercent: widthPercent,
+      heightPercent: heightPercent,
+      rotation: signatureField.rotation,
+      pageNumber: pageNumber, // Only for multi-page PDFs
+      fileIndex: isMultiFile ? currentFileIndex : undefined,
+      docWidth: docWidth,
+      docHeight: docHeight
     };
     
-    console.log('🎨 Placing signature on document:', {
-      position: { x: newPlacedSignature.x, y: newPlacedSignature.y },
-      size: { width: newPlacedSignature.width, height: newPlacedSignature.height },
+    console.log('🎨 Placing signature with NORMALIZED coordinates:', {
+      normalized: { 
+        xPercent: xPercent.toFixed(4), 
+        yPercent: yPercent.toFixed(4), 
+        wPercent: widthPercent.toFixed(4), 
+        hPercent: heightPercent.toFixed(4) 
+      },
+      absoluteAtZoom100: { x: normalizedX, y: normalizedY, w: normalizedWidth, h: normalizedHeight },
+      documentSize: { width: docWidth, height: docHeight },
+      currentZoom: fileZoom,
       rotation: newPlacedSignature.rotation,
       pageNumber: newPlacedSignature.pageNumber,
-      previewDimensions: { width: previewWidth, height: previewHeight },
-      fileType: fileContent?.type,
-      currentSignatureCount: placedSignatures.length
+      fileIndex: newPlacedSignature.fileIndex,
+      fileType: fileContent?.type
     });
     
     setPlacedSignatures(prev => {
       const updated = [...prev, newPlacedSignature];
       console.log('📝 Updated signatures array - Total signatures:', updated.length);
       updated.forEach((sig, idx) => {
-        console.log(`  Signature ${idx + 1}: x=${sig.x}, y=${sig.y}, page=${sig.pageNumber || 'N/A'}`);
+        console.log(`  Signature ${idx + 1}: xPercent=${sig.xPercent.toFixed(4)}, yPercent=${sig.yPercent.toFixed(4)}, page=${sig.pageNumber || 'N/A'}, file=${sig.fileIndex ?? 'N/A'}`);
       });
       return updated;
     });
@@ -787,7 +866,7 @@ export const DocumensoIntegration: React.FC<DocumensoIntegrationProps> = ({
     });
   };
 
-  // Handle signature drag
+  // Handle signature drag - Using NORMALIZED coordinates
   const handleSignatureMouseDown = (e: React.MouseEvent, sigId: string) => {
     e.stopPropagation();
     const signature = placedSignatures.find(s => s.id === sigId);
@@ -799,17 +878,24 @@ export const DocumensoIntegration: React.FC<DocumensoIntegrationProps> = ({
     const rect = previewContainerRef.current?.getBoundingClientRect();
     if (!rect) return;
 
-    // Convert mouse position to document coordinate space
+    // Get actual document dimensions (not preview dimensions!)
+    const docWidth = signature.docWidth;
+    const docHeight = signature.docHeight;
+
+    // Convert mouse position to document coordinate space (accounting for zoom)
     const mouseX = e.clientX - rect.left;
     const mouseY = e.clientY - rect.top;
+    const zoomFactor = fileZoom / 100;
+    const docMouseX = mouseX / zoomFactor;
+    const docMouseY = mouseY / zoomFactor;
     
-    // Calculate offset in document space (accounting for zoom)
-    const docMouseX = mouseX / (fileZoom / 100);
-    const docMouseY = mouseY / (fileZoom / 100);
+    // Convert normalized coordinates to absolute coordinates for dragging
+    const sigAbsoluteX = signature.xPercent * docWidth;
+    const sigAbsoluteY = signature.yPercent * docHeight;
 
     setDragOffset({
-      x: docMouseX - signature.x,
-      y: docMouseY - signature.y
+      x: docMouseX - sigAbsoluteX,
+      y: docMouseY - sigAbsoluteY
     });
   };
 
@@ -821,74 +907,96 @@ export const DocumensoIntegration: React.FC<DocumensoIntegrationProps> = ({
     setResizeCorner(corner);
   };
 
-  // Handle mouse move for drag/resize
+  // Handle mouse move for drag/resize - Using NORMALIZED coordinates
   const handlePreviewMouseMove = (e: React.MouseEvent) => {
     if (!selectedSignatureId) return;
 
-    if (isDragging) {
-      const rect = previewContainerRef.current?.getBoundingClientRect();
-      if (!rect) return;
+    const signature = placedSignatures.find(s => s.id === selectedSignatureId);
+    if (!signature) return;
 
-      // Convert mouse position from screen space to document space
-      const mouseX = e.clientX - rect.left;
-      const mouseY = e.clientY - rect.top;
-      const docMouseX = mouseX / (fileZoom / 100);
-      const docMouseY = mouseY / (fileZoom / 100);
+    const rect = previewContainerRef.current?.getBoundingClientRect();
+    if (!rect) return;
+
+    // Get document dimensions
+    const docWidth = signature.docWidth;
+    const docHeight = signature.docHeight;
+
+    // Convert mouse position from screen space to document space (accounting for zoom)
+    const mouseX = e.clientX - rect.left;
+    const mouseY = e.clientY - rect.top;
+    const zoomFactor = fileZoom / 100;
+    const docMouseX = mouseX / zoomFactor;
+    const docMouseY = mouseY / zoomFactor;
+
+    if (isDragging) {
+      // Calculate new position in absolute coordinates
+      const newAbsoluteX = docMouseX - dragOffset.x;
+      const newAbsoluteY = docMouseY - dragOffset.y;
+
+      // Convert to normalized coordinates (0-1 range)
+      const newXPercent = newAbsoluteX / docWidth;
+      const newYPercent = newAbsoluteY / docHeight;
 
       setPlacedSignatures(prev => prev.map(sig => {
         if (sig.id === selectedSignatureId) {
           return {
             ...sig,
-            x: docMouseX - dragOffset.x,
-            y: docMouseY - dragOffset.y
+            xPercent: Math.max(0, Math.min(1, newXPercent)), // Clamp to 0-1
+            yPercent: Math.max(0, Math.min(1, newYPercent))
           };
         }
         return sig;
       }));
     } else if (isResizing && resizeCorner) {
-      const signature = placedSignatures.find(s => s.id === selectedSignatureId);
-      if (!signature) return;
+      // Convert current signature to absolute coordinates
+      const sigAbsoluteX = signature.xPercent * docWidth;
+      const sigAbsoluteY = signature.yPercent * docHeight;
+      const sigAbsoluteWidth = signature.widthPercent * docWidth;
+      const sigAbsoluteHeight = signature.heightPercent * docHeight;
 
-      const rect = previewContainerRef.current?.getBoundingClientRect();
-      if (!rect) return;
+      let newWidth = sigAbsoluteWidth;
+      let newHeight = sigAbsoluteHeight;
+      let newX = sigAbsoluteX;
+      let newY = sigAbsoluteY;
 
-      // Convert mouse position from screen space to document space
-      const mouseX = e.clientX - rect.left;
-      const mouseY = e.clientY - rect.top;
-      const docMouseX = mouseX / (fileZoom / 100);
-      const docMouseY = mouseY / (fileZoom / 100);
+      switch (resizeCorner) {
+        case 'br': // Bottom right
+          newWidth = Math.max(50, docMouseX - sigAbsoluteX);
+          newHeight = Math.max(30, docMouseY - sigAbsoluteY);
+          break;
+        case 'bl': // Bottom left
+          newWidth = Math.max(50, sigAbsoluteX + sigAbsoluteWidth - docMouseX);
+          newHeight = Math.max(30, docMouseY - sigAbsoluteY);
+          newX = docMouseX;
+          break;
+        case 'tr': // Top right
+          newWidth = Math.max(50, docMouseX - sigAbsoluteX);
+          newHeight = Math.max(30, sigAbsoluteY + sigAbsoluteHeight - docMouseY);
+          newY = docMouseY;
+          break;
+        case 'tl': // Top left
+          newWidth = Math.max(50, sigAbsoluteX + sigAbsoluteWidth - docMouseX);
+          newHeight = Math.max(30, sigAbsoluteY + sigAbsoluteHeight - docMouseY);
+          newX = docMouseX;
+          newY = docMouseY;
+          break;
+      }
+
+      // Convert back to normalized coordinates
+      const newXPercent = newX / docWidth;
+      const newYPercent = newY / docHeight;
+      const newWidthPercent = newWidth / docWidth;
+      const newHeightPercent = newHeight / docHeight;
 
       setPlacedSignatures(prev => prev.map(sig => {
         if (sig.id === selectedSignatureId) {
-          let newWidth = sig.width;
-          let newHeight = sig.height;
-          let newX = sig.x;
-          let newY = sig.y;
-
-          switch (resizeCorner) {
-            case 'br': // Bottom right
-              newWidth = Math.max(50, docMouseX - sig.x);
-              newHeight = Math.max(30, docMouseY - sig.y);
-              break;
-            case 'bl': // Bottom left
-              newWidth = Math.max(50, sig.x + sig.width - docMouseX);
-              newHeight = Math.max(30, docMouseY - sig.y);
-              newX = docMouseX;
-              break;
-            case 'tr': // Top right
-              newWidth = Math.max(50, docMouseX - sig.x);
-              newHeight = Math.max(30, sig.y + sig.height - docMouseY);
-              newY = docMouseY;
-              break;
-            case 'tl': // Top left
-              newWidth = Math.max(50, sig.x + sig.width - docMouseX);
-              newHeight = Math.max(30, sig.y + sig.height - docMouseY);
-              newX = docMouseX;
-              newY = docMouseY;
-              break;
-          }
-
-          return { ...sig, width: newWidth, height: newHeight, x: newX, y: newY };
+          return { 
+            ...sig, 
+            xPercent: Math.max(0, Math.min(1, newXPercent)),
+            yPercent: Math.max(0, Math.min(1, newYPercent)),
+            widthPercent: Math.max(0.05, Math.min(1, newWidthPercent)), // Min 5% width
+            heightPercent: Math.max(0.03, Math.min(1, newHeightPercent)) // Min 3% height
+          };
         }
         return sig;
       }));
@@ -1395,16 +1503,24 @@ export const DocumensoIntegration: React.FC<DocumensoIntegrationProps> = ({
                                 
                                 {/* Render signatures ONLY for this specific PDF page */}
                                 {placedSignatures
-                                  .filter(sig => sig.pageNumber === index + 1) // Only show signatures that belong to THIS page
-                                  .map((signature) => (
-                                  <div
+                                  .filter(sig => sig.pageNumber === index + 1 && (sig.fileIndex === undefined || sig.fileIndex === currentFileIndex))
+                                  .map((signature) => {
+                                    // ✅ Convert NORMALIZED coordinates (0-1) to pixel coordinates for display
+                                    // Multiply by document dimensions, then apply zoom
+                                    const zoomFactor = fileZoom / 100;
+                                    const displayX = signature.xPercent * signature.docWidth * zoomFactor;
+                                    const displayY = signature.yPercent * signature.docHeight * zoomFactor;
+                                    const displayWidth = signature.widthPercent * signature.docWidth * zoomFactor;
+                                    const displayHeight = signature.heightPercent * signature.docHeight * zoomFactor;
+                                    
+                                    return <div
                                     key={`${signature.id}-page-${index}`}
                                     className={`absolute cursor-pointer select-none transition-all duration-200 ${selectedSignatureId === signature.id ? 'ring-2 ring-blue-400/60 shadow-lg border-2 border-blue-500' : 'hover:shadow-sm border border-transparent'}`}
                                     style={{
-                                      left: `${signature.x}px`,
-                                      top: `${signature.y}px`,
-                                      width: `${signature.width}px`,
-                                      height: `${signature.height}px`,
+                                      left: `${displayX}px`,
+                                      top: `${displayY}px`,
+                                      width: `${displayWidth}px`,
+                                      height: `${displayHeight}px`,
                                       transform: `rotate(${signature.rotation}deg)`,
                                       transformOrigin: 'center',
                                       zIndex: selectedSignatureId === signature.id ? 100 : 50,
@@ -1484,8 +1600,8 @@ export const DocumensoIntegration: React.FC<DocumensoIntegrationProps> = ({
                                         />
                                       </>
                                     )}
-                                  </div>
-                                ))}
+                                  </div>;
+                                })}
                               </div>
                             ))}
 
@@ -1543,18 +1659,30 @@ export const DocumensoIntegration: React.FC<DocumensoIntegrationProps> = ({
                             {fileContent?.type !== 'pdf' && (
                               <>
                                 {console.log('🔍 Rendering signatures for non-PDF:', placedSignatures.length, 'signatures')}
-                                {placedSignatures.length > 0 && console.log('First signature position:', placedSignatures[0])}
-                                {placedSignatures.map((signature, index) => {
-                                  console.log(`Rendering signature ${index + 1}:`, { x: signature.x, y: signature.y, width: signature.width, height: signature.height });
-                                  return (
-                                    <div
+                                {placedSignatures
+                                  .filter(sig => sig.fileIndex === undefined || sig.fileIndex === currentFileIndex)
+                                  .map((signature, index) => {
+                                    // ✅ Convert NORMALIZED coordinates (0-1) to pixel coordinates for display
+                                    const zoomFactor = fileZoom / 100;
+                                    const displayX = signature.xPercent * signature.docWidth * zoomFactor;
+                                    const displayY = signature.yPercent * signature.docHeight * zoomFactor;
+                                    const displayWidth = signature.widthPercent * signature.docWidth * zoomFactor;
+                                    const displayHeight = signature.heightPercent * signature.docHeight * zoomFactor;
+                                    
+                                    console.log(`Rendering signature ${index + 1}:`, { 
+                                      normalized: { xPercent: signature.xPercent, yPercent: signature.yPercent }, 
+                                      display: { x: displayX, y: displayY, width: displayWidth, height: displayHeight },
+                                      zoom: fileZoom
+                                    });
+                                    
+                                    return <div
                                       key={signature.id}
                                       className={`absolute cursor-pointer select-none transition-all duration-200 ${selectedSignatureId === signature.id ? 'ring-2 ring-blue-400/60 shadow-lg border-2 border-blue-500' : 'hover:shadow-sm border border-transparent'}`}
                                       style={{
-                                        left: `${signature.x}px`,
-                                        top: `${signature.y}px`,
-                                        width: `${signature.width}px`,
-                                        height: `${signature.height}px`,
+                                        left: `${displayX}px`,
+                                        top: `${displayY}px`,
+                                        width: `${displayWidth}px`,
+                                        height: `${displayHeight}px`,
                                         transform: `rotate(${signature.rotation}deg)`,
                                         transformOrigin: 'center',
                                         zIndex: selectedSignatureId === signature.id ? 100 : 50,
@@ -1639,8 +1767,7 @@ export const DocumensoIntegration: React.FC<DocumensoIntegrationProps> = ({
                                           />
                                         </>
                                       )}
-                                    </div>
-                                  );
+                                    </div>;
                                 })}
                               </>
                             )}
