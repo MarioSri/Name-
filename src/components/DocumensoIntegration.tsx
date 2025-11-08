@@ -75,6 +75,9 @@ export const DocumensoIntegration: React.FC<DocumensoIntegrationProps> = ({
   const [fileZoom, setFileZoom] = useState(100);
   const [fileRotation, setFileRotation] = useState(0);
   
+  // Current page tracking for multi-page documents
+  const [currentPageNumber, setCurrentPageNumber] = useState(1); // 1-based page index
+  
   // Multi-file navigation state
   const [currentFileIndex, setCurrentFileIndex] = useState(0);
   const isMultiFile = files && files.length > 1;
@@ -89,6 +92,7 @@ export const DocumensoIntegration: React.FC<DocumensoIntegrationProps> = ({
     width: number;
     height: number;
     rotation: number;
+    pageNumber?: number; // Track which page this signature belongs to (1-based index, undefined for single-page docs)
     previewWidth?: number;  // Store preview dimensions for scale calculation
     previewHeight?: number;
   }>>([]);
@@ -127,8 +131,19 @@ export const DocumensoIntegration: React.FC<DocumensoIntegrationProps> = ({
   React.useEffect(() => {
     if (isOpen) {
       setCurrentFileIndex(0);
+      setCurrentPageNumber(1); // Reset to page 1 when opening
     }
   }, [isOpen, files]);
+
+  // Scroll to current page when page number changes (for multi-page PDFs)
+  React.useEffect(() => {
+    if (fileContent?.type === 'pdf' && fileContent?.totalPages > 1) {
+      const pageElement = window.document.getElementById(`pdf-page-${currentPageNumber - 1}`);
+      if (pageElement) {
+        pageElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+    }
+  }, [currentPageNumber, fileContent]);
 
   // Load file content when current file changes
   React.useEffect(() => {
@@ -268,6 +283,7 @@ export const DocumensoIntegration: React.FC<DocumensoIntegrationProps> = ({
     if (fileContent?.type === 'pdf' && fileContent.pageCanvases) {
       for (let pageIndex = 0; pageIndex < fileContent.pageCanvases.length; pageIndex++) {
         const pageDataUrl = fileContent.pageCanvases[pageIndex];
+        const currentPageNum = pageIndex + 1; // 1-based page number
         
         // Create canvas for merging
         const canvas = window.document.createElement('canvas');
@@ -286,8 +302,12 @@ export const DocumensoIntegration: React.FC<DocumensoIntegrationProps> = ({
         canvas.height = pageImg.height;
         ctx.drawImage(pageImg, 0, 0);
 
-        // Draw all signatures on this page
-        for (const signature of placedSignatures) {
+        // Draw ONLY signatures that belong to THIS specific page
+        const pageSignatures = placedSignatures.filter(sig => sig.pageNumber === currentPageNum);
+        
+        console.log(`📄 Processing page ${currentPageNum}: ${pageSignatures.length} signature(s) to merge`);
+        
+        for (const signature of pageSignatures) {
           // Calculate scale ratio between preview and actual canvas
           const previewWidth = signature.previewWidth || 800;
           const previewHeight = signature.previewHeight || 600;
@@ -540,7 +560,7 @@ export const DocumensoIntegration: React.FC<DocumensoIntegrationProps> = ({
       
       toast({
         title: "Document Signed Successfully",
-        description: `✅ Signed by ${currentSignedCount} Recipient${currentSignedCount > 1 ? 's' : ''} • ${currentSignedCount} Signature${currentSignedCount > 1 ? 's' : ''}`,
+        description: `✅ Signed by 1 Recipient • ${placedSignatures.length} Signature${placedSignatures.length > 1 ? 's' : ''}`,
         duration: 5000,
       });
       
@@ -715,6 +735,11 @@ export const DocumensoIntegration: React.FC<DocumensoIntegrationProps> = ({
     const previewWidth = previewRect?.width || 800;
     const previewHeight = previewRect?.height || 600;
     
+    // Determine page number for multi-page documents (PDFs)
+    const pageNumber = fileContent?.type === 'pdf' && fileContent?.totalPages > 1 
+      ? currentPageNumber 
+      : undefined; // undefined for single-page documents
+    
     const newPlacedSignature = {
       id: Date.now().toString(),
       data: signatureData,
@@ -723,6 +748,7 @@ export const DocumensoIntegration: React.FC<DocumensoIntegrationProps> = ({
       width: signatureField.width, // Use signature field size
       height: signatureField.height,
       rotation: signatureField.rotation, // Match field rotation
+      pageNumber: pageNumber, // Track which page this signature belongs to
       previewWidth: previewWidth, // Store for scale calculation during merge
       previewHeight: previewHeight
     };
@@ -731,6 +757,7 @@ export const DocumensoIntegration: React.FC<DocumensoIntegrationProps> = ({
       position: { x: newPlacedSignature.x, y: newPlacedSignature.y },
       size: { width: newPlacedSignature.width, height: newPlacedSignature.height },
       rotation: newPlacedSignature.rotation,
+      pageNumber: newPlacedSignature.pageNumber,
       previewDimensions: { width: previewWidth, height: previewHeight },
       fileType: fileContent?.type,
       currentSignatureCount: placedSignatures.length
@@ -740,7 +767,7 @@ export const DocumensoIntegration: React.FC<DocumensoIntegrationProps> = ({
       const updated = [...prev, newPlacedSignature];
       console.log('📝 Updated signatures array - Total signatures:', updated.length);
       updated.forEach((sig, idx) => {
-        console.log(`  Signature ${idx + 1}: x=${sig.x}, y=${sig.y}, visible in DOM`);
+        console.log(`  Signature ${idx + 1}: x=${sig.x}, y=${sig.y}, page=${sig.pageNumber || 'N/A'}`);
       });
       return updated;
     });
@@ -1265,7 +1292,7 @@ export const DocumensoIntegration: React.FC<DocumensoIntegrationProps> = ({
                         </div>
                       ) : fileContent ? (
                         <div className="p-4 pb-8 w-full relative">
-                          {/* Zoom and Rotation Controls */}
+                          {/* Zoom, Rotation, and Page Navigation Controls */}
                           <div className="flex items-center justify-center gap-2 mb-4 sticky top-0 bg-white/95 backdrop-blur-sm p-2 rounded-lg shadow-sm z-10">
                             <Button
                               variant="outline"
@@ -1294,8 +1321,37 @@ export const DocumensoIntegration: React.FC<DocumensoIntegrationProps> = ({
                             >
                               <RotateCw className="h-4 w-4" />
                             </Button>
+                            
+                            {/* Page Navigation for Multi-Page PDFs */}
+                            {fileContent.type === 'pdf' && fileContent.totalPages && fileContent.totalPages > 1 && (
+                              <>
+                                <div className="h-6 w-px bg-gray-300 mx-1" />
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={() => setCurrentPageNumber(Math.max(1, currentPageNumber - 1))}
+                                  disabled={currentPageNumber <= 1}
+                                  title="Previous Page"
+                                >
+                                  <ChevronLeft className="h-4 w-4" />
+                                </Button>
+                                <Badge variant="default" className="px-3 font-mono bg-blue-600">
+                                  Page {currentPageNumber} / {fileContent.totalPages}
+                                </Badge>
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={() => setCurrentPageNumber(Math.min(fileContent.totalPages, currentPageNumber + 1))}
+                                  disabled={currentPageNumber >= fileContent.totalPages}
+                                  title="Next Page"
+                                >
+                                  <ChevronRight className="h-4 w-4" />
+                                </Button>
+                              </>
+                            )}
+                            
                             {fileContent.type === 'pdf' && fileContent.totalPages && (
-                              <Badge variant="outline">{fileContent.totalPages} pages</Badge>
+                              <Badge variant="outline">{fileContent.totalPages} page{fileContent.totalPages > 1 ? 's' : ''}</Badge>
                             )}
                           </div>
 
@@ -1320,8 +1376,10 @@ export const DocumensoIntegration: React.FC<DocumensoIntegrationProps> = ({
                                   Page {index + 1} of {fileContent.totalPages}
                                 </Badge>
                                 
-                                {/* Render signatures on this PDF page */}
-                                {placedSignatures.map((signature) => (
+                                {/* Render signatures ONLY for this specific PDF page */}
+                                {placedSignatures
+                                  .filter(sig => sig.pageNumber === index + 1) // Only show signatures that belong to THIS page
+                                  .map((signature) => (
                                   <div
                                     key={`${signature.id}-page-${index}`}
                                     className={`absolute cursor-pointer select-none transition-all duration-200 ${selectedSignatureId === signature.id ? 'ring-2 ring-blue-400/60 shadow-lg border-2 border-blue-500' : 'hover:shadow-sm border border-transparent'}`}
