@@ -98,6 +98,9 @@ export const DocumensoIntegration: React.FC<DocumensoIntegrationProps> = ({
     // Store original document dimensions for reference
     docWidth: number;      // Original document width at 100% zoom
     docHeight: number;     // Original document height at 100% zoom
+    // Track signature attribution for approval chain visibility
+    signedBy?: string;     // Name of the user who placed this signature
+    signedAt?: string;     // ISO timestamp when signature was placed
   }>>([]);
   const [selectedSignatureId, setSelectedSignatureId] = useState<string | null>(null);
   const [isDragging, setIsDragging] = useState(false);
@@ -140,6 +143,67 @@ export const DocumensoIntegration: React.FC<DocumensoIntegrationProps> = ({
       setCurrentPageNumber(1); // Reset to page 1 when opening
     }
   }, [isOpen, files]);
+
+  // Load existing signatures when modal opens - FOR MULTI-RECIPIENT APPROVAL CHAIN
+  React.useEffect(() => {
+    if (!isOpen || !document.id) {
+      // Clear signatures when modal closes
+      setPlacedSignatures([]);
+      return;
+    }
+
+    console.log('📥 Loading existing signatures for document:', document.id);
+
+    // Try to load from pending-approvals first (for recipients in approval chain)
+    try {
+      const pendingApprovals = JSON.parse(localStorage.getItem('pending-approvals') || '[]');
+      const currentDoc = pendingApprovals.find((doc: any) => doc.id === document.id);
+      
+      if (currentDoc?.signatureMetadata && Array.isArray(currentDoc.signatureMetadata)) {
+        console.log('✅ Loading', currentDoc.signatureMetadata.length, 'existing signature(s) from approval chain');
+        setPlacedSignatures(currentDoc.signatureMetadata);
+        
+        // Log signature details for verification
+        currentDoc.signatureMetadata.forEach((sig: any, idx: number) => {
+          console.log(`  Signature ${idx + 1}:`, {
+            page: sig.pageNumber || 'N/A',
+            file: sig.fileIndex ?? 'N/A',
+            position: `${(sig.xPercent * 100).toFixed(1)}%, ${(sig.yPercent * 100).toFixed(1)}%`
+          });
+        });
+        return;
+      }
+    } catch (error) {
+      console.error('❌ Error loading signatures from pending-approvals:', error);
+    }
+
+    // Fallback: Try submitted-documents (for original submitter or tracking)
+    try {
+      const submittedDocs = JSON.parse(localStorage.getItem('submitted-documents') || '[]');
+      const currentDoc = submittedDocs.find((doc: any) => doc.id === document.id);
+      
+      if (currentDoc?.signatureMetadata && Array.isArray(currentDoc.signatureMetadata)) {
+        console.log('✅ Loading', currentDoc.signatureMetadata.length, 'existing signature(s) from submitted documents');
+        setPlacedSignatures(currentDoc.signatureMetadata);
+        
+        // Log signature details for verification
+        currentDoc.signatureMetadata.forEach((sig: any, idx: number) => {
+          console.log(`  Signature ${idx + 1}:`, {
+            page: sig.pageNumber || 'N/A',
+            file: sig.fileIndex ?? 'N/A',
+            position: `${(sig.xPercent * 100).toFixed(1)}%, ${(sig.yPercent * 100).toFixed(1)}%`
+          });
+        });
+        return;
+      }
+    } catch (error) {
+      console.error('❌ Error loading signatures from submitted-documents:', error);
+    }
+
+    // No existing signatures found - start fresh
+    console.log('ℹ️ No existing signatures found - starting with clean document');
+    setPlacedSignatures([]);
+  }, [isOpen, document.id]);
 
   // Calculate actual document dimensions when file content changes
   React.useEffect(() => {
@@ -520,7 +584,9 @@ export const DocumensoIntegration: React.FC<DocumensoIntegrationProps> = ({
           docWidth: sig.docWidth,
           docHeight: sig.docHeight,
           pageNumber: sig.pageNumber,
-          fileIndex: sig.fileIndex
+          fileIndex: sig.fileIndex,
+          signedBy: sig.signedBy || user.name, // Ensure we have signer info
+          signedAt: sig.signedAt || new Date().toISOString() // Ensure we have timestamp
         }));
         
         // Update submitted-documents (Track Documents) - store metadata only
@@ -831,7 +897,9 @@ export const DocumensoIntegration: React.FC<DocumensoIntegrationProps> = ({
       pageNumber: pageNumber, // Only for multi-page PDFs
       fileIndex: isMultiFile ? currentFileIndex : undefined,
       docWidth: docWidth,
-      docHeight: docHeight
+      docHeight: docHeight,
+      signedBy: user.name, // Track who placed this signature
+      signedAt: new Date().toISOString() // Track when signature was placed
     };
     
     console.log('🎨 Placing signature with NORMALIZED coordinates:', {
@@ -871,6 +939,13 @@ export const DocumensoIntegration: React.FC<DocumensoIntegrationProps> = ({
     e.stopPropagation();
     const signature = placedSignatures.find(s => s.id === sigId);
     if (!signature) return;
+
+    // Only allow dragging of current user's signatures
+    if (signature.signedBy && signature.signedBy !== user.name) {
+      console.log('🚫 Cannot drag signature from another user:', signature.signedBy);
+      setSelectedSignatureId(sigId); // Allow selection but not dragging
+      return;
+    }
 
     setSelectedSignatureId(sigId);
     setIsDragging(true);
@@ -1009,8 +1084,14 @@ export const DocumensoIntegration: React.FC<DocumensoIntegrationProps> = ({
     setResizeCorner(null);
   };
 
-  // Rotate signature
+  // Rotate signature - Only current user's signatures
   const rotateSignature = (sigId: string) => {
+    const signature = placedSignatures.find(s => s.id === sigId);
+    if (signature?.signedBy && signature.signedBy !== user.name) {
+      console.log('🚫 Cannot rotate signature from another user:', signature.signedBy);
+      return;
+    }
+    
     setPlacedSignatures(prev => prev.map(sig => {
       if (sig.id === sigId) {
         return { ...sig, rotation: (sig.rotation + 90) % 360 };
@@ -1019,8 +1100,19 @@ export const DocumensoIntegration: React.FC<DocumensoIntegrationProps> = ({
     }));
   };
 
-  // Delete signature
+  // Delete signature - Only current user's signatures
   const deleteSignature = (sigId: string) => {
+    const signature = placedSignatures.find(s => s.id === sigId);
+    if (signature?.signedBy && signature.signedBy !== user.name) {
+      toast({
+        title: "Cannot Delete Signature",
+        description: `This signature was placed by ${signature.signedBy}. You can only delete your own signatures.`,
+        variant: "destructive"
+      });
+      console.log('🚫 Cannot delete signature from another user:', signature.signedBy);
+      return;
+    }
+    
     setPlacedSignatures(prev => prev.filter(sig => sig.id !== sigId));
     setSelectedSignatureId(null);
   };
@@ -1377,11 +1469,24 @@ export const DocumensoIntegration: React.FC<DocumensoIntegrationProps> = ({
                 </CardTitle>
                 {/* Current File Name Display */}
                 {currentFile && (
-                  <div className="px-4 pb-2">
+                  <div className="px-4 pb-2 flex items-center gap-2">
                     <Badge variant="outline" className="text-xs max-w-full truncate">
                       <FileText className="w-3 h-3 mr-1 inline" />
                       {currentFile.name}
                     </Badge>
+                    
+                    {/* Signature Count Indicator */}
+                    {placedSignatures.length > 0 && (
+                      <Badge variant="secondary" className="text-xs">
+                        <PenTool className="w-3 h-3 mr-1 inline" />
+                        {placedSignatures.length} signature{placedSignatures.length !== 1 ? 's' : ''}
+                        {placedSignatures.filter(sig => sig.signedBy && sig.signedBy !== user.name).length > 0 && (
+                          <span className="ml-1 text-blue-600">
+                            ({placedSignatures.filter(sig => sig.signedBy && sig.signedBy !== user.name).length} from chain)
+                          </span>
+                        )}
+                      </Badge>
+                    )}
                   </div>
                 )}
               </CardHeader>
@@ -1545,8 +1650,20 @@ export const DocumensoIntegration: React.FC<DocumensoIntegrationProps> = ({
                                       draggable={false}
                                     />
                                     
-                                    {/* Control Buttons (when selected) */}
-                                    {selectedSignatureId === signature.id && (
+                                    {/* Signature Attribution Badge - Shows who signed */}
+                                    {signature.signedBy && (
+                                      <div className="absolute -bottom-6 left-0 right-0 flex justify-center pointer-events-none">
+                                        <Badge 
+                                          variant={signature.signedBy === user.name ? "default" : "secondary"}
+                                          className="text-xs px-2 py-0.5 bg-white/95 backdrop-blur-sm border shadow-sm"
+                                        >
+                                          {signature.signedBy === user.name ? '✓ You' : signature.signedBy}
+                                        </Badge>
+                                      </div>
+                                    )}
+                                    
+                                    {/* Control Buttons (when selected) - Only for current user's signatures */}
+                                    {selectedSignatureId === signature.id && signature.signedBy === user.name && (
                                       <div className="absolute -top-10 left-0 right-0 flex justify-center gap-1 bg-white/95 backdrop-blur-sm rounded-t-lg border border-b-0 border-blue-500 p-1">
                                         <Button
                                           size="sm"
@@ -1579,8 +1696,8 @@ export const DocumensoIntegration: React.FC<DocumensoIntegrationProps> = ({
                                       </div>
                                     )}
 
-                                    {/* Resize Corners (when selected) */}
-                                    {selectedSignatureId === signature.id && (
+                                    {/* Resize Corners (when selected) - Only for current user's signatures */}
+                                    {selectedSignatureId === signature.id && signature.signedBy === user.name && (
                                       <>
                                         <div
                                           className="absolute -top-2 -left-2 w-4 h-4 bg-blue-500 rounded-full cursor-nwse-resize hover:bg-blue-600 border-2 border-white shadow-md"
@@ -1708,8 +1825,20 @@ export const DocumensoIntegration: React.FC<DocumensoIntegrationProps> = ({
                                         draggable={false}
                                       />
 
-                                      {/* Control Buttons (when selected) */}
-                                      {selectedSignatureId === signature.id && (
+                                      {/* Signature Attribution Badge - Shows who signed */}
+                                      {signature.signedBy && (
+                                        <div className="absolute -bottom-6 left-0 right-0 flex justify-center pointer-events-none">
+                                          <Badge 
+                                            variant={signature.signedBy === user.name ? "default" : "secondary"}
+                                            className="text-xs px-2 py-0.5 bg-white/95 backdrop-blur-sm border shadow-sm"
+                                          >
+                                            {signature.signedBy === user.name ? '✓ You' : signature.signedBy}
+                                          </Badge>
+                                        </div>
+                                      )}
+
+                                      {/* Control Buttons (when selected) - Only for current user's signatures */}
+                                      {selectedSignatureId === signature.id && signature.signedBy === user.name && (
                                         <div className="absolute -top-10 left-0 right-0 flex justify-center gap-1 bg-white/95 backdrop-blur-sm rounded-t-lg border border-b-0 border-blue-500 p-1">
                                           <Button
                                             size="sm"
@@ -1742,8 +1871,8 @@ export const DocumensoIntegration: React.FC<DocumensoIntegrationProps> = ({
                                         </div>
                                       )}
 
-                                      {/* Resize Corners (when selected) */}
-                                      {selectedSignatureId === signature.id && (
+                                      {/* Resize Corners (when selected) - Only for current user's signatures */}
+                                      {selectedSignatureId === signature.id && signature.signedBy === user.name && (
                                         <>
                                           {/* Top Left */}
                                           <div
