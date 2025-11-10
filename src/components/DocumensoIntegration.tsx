@@ -168,7 +168,7 @@ export const DocumensoIntegration: React.FC<DocumensoIntegrationProps> = ({
           console.log(`  Signature ${idx + 1}:`, {
             page: sig.pageNumber || 'N/A',
             file: sig.fileIndex ?? 'N/A',
-            position: `${(sig.xPercent * 100).toFixed(1)}%, ${(sig.yPercent * 100).toFixed(1)}%`
+            position: (sig.xPercent !== undefined && sig.yPercent !== undefined) ? `${(sig.xPercent * 100).toFixed(1)}%, ${(sig.yPercent * 100).toFixed(1)}%` : `${sig.pixelX || 0}px, ${sig.pixelY || 0}px`
           });
         });
         return;
@@ -191,7 +191,7 @@ export const DocumensoIntegration: React.FC<DocumensoIntegrationProps> = ({
           console.log(`  Signature ${idx + 1}:`, {
             page: sig.pageNumber || 'N/A',
             file: sig.fileIndex ?? 'N/A',
-            position: `${(sig.xPercent * 100).toFixed(1)}%, ${(sig.yPercent * 100).toFixed(1)}%`
+            position: (sig.xPercent !== undefined && sig.yPercent !== undefined) ? `${(sig.xPercent * 100).toFixed(1)}%, ${(sig.yPercent * 100).toFixed(1)}%` : `${sig.pixelX || 0}px, ${sig.pixelY || 0}px`
           });
         });
         return;
@@ -904,10 +904,10 @@ export const DocumensoIntegration: React.FC<DocumensoIntegrationProps> = ({
     
     console.log('🎨 Placing signature with NORMALIZED coordinates:', {
       normalized: { 
-        xPercent: xPercent.toFixed(4), 
-        yPercent: yPercent.toFixed(4), 
-        wPercent: widthPercent.toFixed(4), 
-        hPercent: heightPercent.toFixed(4) 
+        xPercent: xPercent?.toFixed(4), 
+        yPercent: yPercent?.toFixed(4), 
+        wPercent: widthPercent?.toFixed(4), 
+        hPercent: heightPercent?.toFixed(4) 
       },
       absoluteAtZoom100: { x: normalizedX, y: normalizedY, w: normalizedWidth, h: normalizedHeight },
       documentSize: { width: docWidth, height: docHeight },
@@ -922,7 +922,7 @@ export const DocumensoIntegration: React.FC<DocumensoIntegrationProps> = ({
       const updated = [...prev, newPlacedSignature];
       console.log('📝 Updated signatures array - Total signatures:', updated.length);
       updated.forEach((sig, idx) => {
-        console.log(`  Signature ${idx + 1}: xPercent=${sig.xPercent.toFixed(4)}, yPercent=${sig.yPercent.toFixed(4)}, page=${sig.pageNumber || 'N/A'}, file=${sig.fileIndex ?? 'N/A'}`);
+        console.log(`  Signature ${idx + 1}: xPercent=${sig.xPercent?.toFixed(4)}, yPercent=${sig.yPercent?.toFixed(4)}, page=${sig.pageNumber || 'N/A'}, file=${sig.fileIndex ?? 'N/A'}`);
       });
       return updated;
     });
