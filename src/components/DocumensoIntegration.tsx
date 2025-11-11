@@ -14,6 +14,7 @@ import { aiSignaturePlacement, SignatureZone, DocumentAnalysis } from '@/service
 import { SignaturePlacementPreview } from '@/components/SignaturePlacementPreview';
 import { useDocumensoAPI } from '@/hooks/useDocumensoAPI';
 import { FileViewer } from '@/components/FileViewer';
+import { FaceAuthentication } from '@/components/FaceAuthentication';
 import * as pdfjsLib from 'pdfjs-dist';
 import mammoth from 'mammoth';
 import * as XLSX from 'xlsx';
@@ -74,6 +75,7 @@ export const DocumensoIntegration: React.FC<DocumensoIntegrationProps> = ({
   const [fileError, setFileError] = useState<string | null>(null);
   const [fileZoom, setFileZoom] = useState(100);
   const [fileRotation, setFileRotation] = useState(0);
+  const [faceVerified, setFaceVerified] = useState(false);
   
   // Current page tracking for multi-page documents
   const [currentPageNumber, setCurrentPageNumber] = useState(1); // 1-based page index
@@ -1930,9 +1932,10 @@ export const DocumensoIntegration: React.FC<DocumensoIntegrationProps> = ({
           {/* Right Column - Signature Interaction & CTA */}
           <div className="pl-6">
             <Tabs value={activeTab} onValueChange={setActiveTab} className="h-full flex flex-col">
-              <TabsList className="grid w-full grid-cols-3 mb-4">
+              <TabsList className="grid w-full grid-cols-4 mb-4">
                 <TabsTrigger value="signature">Sign</TabsTrigger>
                 <TabsTrigger value="library">Library</TabsTrigger>
+                <TabsTrigger value="face-auth">Face Auth</TabsTrigger>
                 <TabsTrigger value="verification">Verify</TabsTrigger>
               </TabsList>
 
@@ -2149,6 +2152,22 @@ export const DocumensoIntegration: React.FC<DocumensoIntegrationProps> = ({
             </Card>
               </TabsContent>
 
+              <TabsContent value="face-auth" className="flex-1 overflow-y-auto">
+                <FaceAuthentication
+                  userId={user.email}
+                  onVerified={(success) => {
+                    setFaceVerified(success);
+                    if (success) {
+                      toast({
+                        title: "Face Verified",
+                        description: "You can now proceed to verification",
+                      });
+                      setActiveTab('verification');
+                    }
+                  }}
+                />
+              </TabsContent>
+
               <TabsContent value="library" className="flex-1 overflow-y-auto">
                 <Card>
                   <CardHeader>
@@ -2213,52 +2232,66 @@ export const DocumensoIntegration: React.FC<DocumensoIntegrationProps> = ({
                 </Card>
               </TabsContent>
 
-              <TabsContent value="verification" className="flex-1 overflow-y-auto">
+              <TabsContent value="verification" className="flex-1 overflow-y-auto space-y-6">
+            {/* Signer Information Card */}
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <User className="w-5 h-5" />
+                  Signer Information
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-3">
+                  <div className="flex items-center gap-2">
+                    <User className="w-4 h-4 text-muted-foreground" />
+                    <span className="text-sm font-medium">{user.name}</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Mail className="w-4 h-4 text-muted-foreground" />
+                    <span className="text-sm">{user.email}</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Badge variant="outline">{user.role}</Badge>
+                  </div>
+                  <div className="flex items-center gap-2 mt-4">
+                    <Camera className="w-4 h-4 text-muted-foreground" />
+                    <span className="text-sm">Face Auth: {faceVerified ? <Badge className="bg-green-500">✓ Verified</Badge> : <Badge variant="outline">Not Verified</Badge>}</span>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Verification Code Card */}
             <Card>
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
                   <Lock className="w-5 h-5" />
-                  Identity Verification
+                  Verification Code
                 </CardTitle>
               </CardHeader>
-              <CardContent className="space-y-6">
-                <div className="grid grid-cols-2 gap-6">
-                  <div className="space-y-4">
-                    <h4 className="font-medium">Signer Information</h4>
-                    <div className="space-y-2">
-                      <div className="flex items-center gap-2">
-                        <User className="w-4 h-4" />
-                        <span className="text-sm">{user.name}</span>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <Mail className="w-4 h-4" />
-                        <span className="text-sm">{user.email}</span>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <Badge variant="outline">{user.role}</Badge>
-                      </div>
-                    </div>
-                  </div>
-                  
-                  <div className="space-y-4">
-                    <h4 className="font-medium">Verification Method</h4>
-                    <div className="space-y-3">
-                      <Label htmlFor="verification-code">Enter Verification Code</Label>
-                      <Input
-                        id="verification-code"
-                        placeholder="Enter 6-digit code"
-                        value={verificationCode}
-                        onChange={(e) => setVerificationCode(e.target.value)}
-                        maxLength={6}
-                      />
-                      <p className="text-xs text-muted-foreground">
-                        Code sent to {user.email}
-                      </p>
-                    </div>
-                  </div>
+              <CardContent className="space-y-4">
+                <div className="space-y-3">
+                  <Label htmlFor="verification-code">Enter 6-Digit Code</Label>
+                  <Input
+                    id="verification-code"
+                    placeholder="000000"
+                    value={verificationCode}
+                    onChange={(e) => setVerificationCode(e.target.value)}
+                    maxLength={6}
+                    className="text-center text-lg tracking-widest"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Code sent to {user.email}
+                  </p>
                 </div>
-                
-                {isProcessing ? (
+              </CardContent>
+            </Card>
+
+            {/* Processing/Completed States */}
+            {isProcessing ? (
+              <Card>
+                <CardContent className="p-6">
                   <div className="space-y-4 text-center">
                     <div className="w-16 h-16 mx-auto bg-blue-100 rounded-full flex items-center justify-center">
                       <PenTool className="w-8 h-8 text-blue-600 animate-pulse" />
@@ -2267,7 +2300,11 @@ export const DocumensoIntegration: React.FC<DocumensoIntegrationProps> = ({
                     <Progress value={signingProgress} className="w-full max-w-md mx-auto" />
                     <p className="text-sm text-muted-foreground">{signingProgress}% Complete</p>
                   </div>
-                ) : isCompleted ? (
+                </CardContent>
+              </Card>
+            ) : isCompleted ? (
+              <Card>
+                <CardContent className="p-6">
                   <div className="space-y-4 text-center">
                     <div className="w-16 h-16 mx-auto bg-green-100 rounded-full flex items-center justify-center">
                       <CheckCircle2 className="w-8 h-8 text-green-600" />
@@ -2283,17 +2320,26 @@ export const DocumensoIntegration: React.FC<DocumensoIntegrationProps> = ({
                       </Button>
                     </div>
                   </div>
-                ) : (
-                  <div className="flex justify-between">
-                    <Button variant="outline" onClick={() => setActiveTab('signature')}>Back</Button>
-                    <Button onClick={handleVerification} disabled={verificationCode.length !== 6}>
-                      Verify
-                    </Button>
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-              </TabsContent>
+                </CardContent>
+              </Card>
+            ) : null}
+
+            {/* Action Buttons */}
+            {!isProcessing && !isCompleted && (
+              <div className="flex justify-between pt-4">
+                <Button variant="outline" onClick={() => setActiveTab('signature')}>
+                  Back
+                </Button>
+                <Button 
+                  onClick={handleVerification} 
+                  disabled={verificationCode.length !== 6 || !faceVerified}
+                  className={faceVerified ? 'bg-green-600 hover:bg-green-700' : ''}
+                >
+                  {faceVerified ? '✓ Complete Signing' : '🔒 Verify Face First'}
+                </Button>
+              </div>
+            )}
+          </TabsContent>
 
 
             </Tabs>

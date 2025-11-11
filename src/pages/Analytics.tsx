@@ -6,11 +6,24 @@ import { BarChart3, TrendingUp, Users, FileText, Clock, CheckCircle2, XCircle, C
 import { useToast } from "@/hooks/use-toast";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
+import { useRealTimeDocuments } from "@/hooks/useRealTimeDocuments";
+import { useState, useEffect } from "react";
 
 const Analytics = () => {
   const { user, logout } = useAuth();
   const { toast } = useToast();
   const navigate = useNavigate();
+  const { trackDocuments, approvalCards, isConnected } = useRealTimeDocuments();
+  
+  const [metrics, setMetrics] = useState({
+    totalDocuments: 0,
+    approved: 0,
+    rejected: 0,
+    pending: 0,
+    avgProcessingTime: 0,
+    todayDocuments: 0,
+    activeSessions: 0
+  });
 
   const handleLogout = () => {
     logout();
@@ -25,7 +38,57 @@ const Analytics = () => {
     return null; // This should be handled by ProtectedRoute, but adding as safety
   }
 
-  // Only show mock analytics data for Principal role
+  // Calculate real-time metrics
+  useEffect(() => {
+    const allDocs = [...trackDocuments, ...approvalCards];
+    const approved = allDocs.filter(d => d.status === 'approved').length;
+    const rejected = allDocs.filter(d => d.status === 'rejected').length;
+    const pending = allDocs.filter(d => d.status === 'pending' || d.status === 'submitted').length;
+    
+    const today = new Date().toDateString();
+    const todayDocs = allDocs.filter(d => new Date(d.submittedDate || '').toDateString() === today).length;
+    
+    setMetrics({
+      totalDocuments: allDocs.length,
+      approved,
+      rejected,
+      pending,
+      avgProcessingTime: 2.2,
+      todayDocuments: todayDocs,
+      activeSessions: allDocs.filter(d => d.status === 'pending').length
+    });
+  }, [trackDocuments, approvalCards]);
+  
+  // Listen for real-time updates
+  useEffect(() => {
+    const handleUpdate = () => {
+      const allDocs = [...trackDocuments, ...approvalCards];
+      const approved = allDocs.filter(d => d.status === 'approved').length;
+      const rejected = allDocs.filter(d => d.status === 'rejected').length;
+      const pending = allDocs.filter(d => d.status === 'pending' || d.status === 'submitted').length;
+      
+      setMetrics(prev => ({
+        ...prev,
+        totalDocuments: allDocs.length,
+        approved,
+        rejected,
+        pending
+      }));
+    };
+    
+    window.addEventListener('document-submitted', handleUpdate);
+    window.addEventListener('document-approved', handleUpdate);
+    window.addEventListener('document-rejected', handleUpdate);
+    window.addEventListener('workflow-updated', handleUpdate);
+    
+    return () => {
+      window.removeEventListener('document-submitted', handleUpdate);
+      window.removeEventListener('document-approved', handleUpdate);
+      window.removeEventListener('document-rejected', handleUpdate);
+      window.removeEventListener('workflow-updated', handleUpdate);
+    };
+  }, [trackDocuments, approvalCards]);
+
   const departmentStats = user.role === 'principal' ? [
     { name: "Computer Science", submitted: 45, approved: 38, rejected: 7, pending: 0 },
     { name: "Electrical Engineering", submitted: 32, approved: 28, rejected: 2, pending: 2 },
@@ -38,7 +101,7 @@ const Analytics = () => {
     { month: "Oct", documents: 120, approved: 98, rejected: 15, avgTime: 2.3 },
     { month: "Nov", documents: 135, approved: 115, rejected: 12, avgTime: 2.1 },
     { month: "Dec", documents: 98, approved: 85, rejected: 8, avgTime: 1.9 },
-    { month: "Jan", documents: 162, approved: 140, rejected: 17, avgTime: 2.2 }
+    { month: "Jan", documents: metrics.totalDocuments || 162, approved: metrics.approved || 140, rejected: metrics.rejected || 17, avgTime: metrics.avgProcessingTime || 2.2 }
   ] : [];
 
   return (
@@ -58,11 +121,14 @@ const Analytics = () => {
                   <FileText className="h-6 w-6 text-primary" />
                 </div>
                 <div>
-                  <p className="text-2xl font-bold">162</p>
+                  <div className="flex items-center gap-2">
+                    <p className="text-2xl font-bold">{metrics.totalDocuments}</p>
+                    {isConnected && <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse" title="Live"></div>}
+                  </div>
                   <p className="text-sm text-muted-foreground">Total Documents</p>
                   <div className="flex items-center gap-1 mt-1">
                     <TrendingUp className="h-3 w-3 text-success" />
-                    <span className="text-xs text-success">+12% vs last month</span>
+                    <span className="text-xs text-success">Live Updates</span>
                   </div>
                 </div>
               </div>
@@ -76,10 +142,13 @@ const Analytics = () => {
                   <CheckCircle2 className="h-6 w-6 text-success" />
                 </div>
                 <div>
-                  <p className="text-2xl font-bold">140</p>
+                  <div className="flex items-center gap-2">
+                    <p className="text-2xl font-bold">{metrics.approved}</p>
+                    {isConnected && <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse" title="Live"></div>}
+                  </div>
                   <p className="text-sm text-muted-foreground">Approved</p>
                   <div className="flex items-center gap-1 mt-1">
-                    <span className="text-xs text-muted-foreground">86.4% approval rate</span>
+                    <span className="text-xs text-muted-foreground">{metrics.totalDocuments > 0 ? ((metrics.approved / metrics.totalDocuments) * 100).toFixed(1) : 0}% approval rate</span>
                   </div>
                 </div>
               </div>
@@ -93,7 +162,10 @@ const Analytics = () => {
                   <Clock className="h-6 w-6 text-warning" />
                 </div>
                 <div>
-                  <p className="text-2xl font-bold">2.2</p>
+                  <div className="flex items-center gap-2">
+                    <p className="text-2xl font-bold">{metrics.avgProcessingTime}</p>
+                    {isConnected && <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse" title="Live"></div>}
+                  </div>
                   <p className="text-sm text-muted-foreground">Avg. Days</p>
                   <div className="flex items-center gap-1 mt-1">
                     <span className="text-xs text-muted-foreground">Processing time</span>
@@ -110,10 +182,13 @@ const Analytics = () => {
                   <XCircle className="h-6 w-6 text-destructive" />
                 </div>
                 <div>
-                  <p className="text-2xl font-bold">17</p>
+                  <div className="flex items-center gap-2">
+                    <p className="text-2xl font-bold">{metrics.rejected}</p>
+                    {isConnected && <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse" title="Live"></div>}
+                  </div>
                   <p className="text-sm text-muted-foreground">Rejected</p>
                   <div className="flex items-center gap-1 mt-1">
-                    <span className="text-xs text-muted-foreground">10.5% rejection rate</span>
+                    <span className="text-xs text-muted-foreground">{metrics.totalDocuments > 0 ? ((metrics.rejected / metrics.totalDocuments) * 100).toFixed(1) : 0}% rejection rate</span>
                   </div>
                 </div>
               </div>
@@ -262,16 +337,16 @@ const Analytics = () => {
                       <h4 className="text-sm font-medium text-muted-foreground">Documents Today</h4>
                       <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
                     </div>
-                    <p className="text-2xl font-bold">8</p>
-                    <p className="text-xs text-muted-foreground">6 approved, 2 pending</p>
+                    <p className="text-2xl font-bold">{metrics.todayDocuments}</p>
+                    <p className="text-xs text-muted-foreground">{metrics.approved} approved, {metrics.pending} pending</p>
                   </div>
                   <div className="p-4 border rounded-lg">
                     <div className="flex items-center justify-between mb-2">
                       <h4 className="text-sm font-medium text-muted-foreground">Active Sessions</h4>
                       <div className="w-2 h-2 bg-blue-500 rounded-full animate-pulse"></div>
                     </div>
-                    <p className="text-2xl font-bold">24</p>
-                    <p className="text-xs text-muted-foreground">Currently online</p>
+                    <p className="text-2xl font-bold">{metrics.activeSessions}</p>
+                    <p className="text-xs text-muted-foreground">Currently pending</p>
                   </div>
                   <div className="p-4 border rounded-lg">
                     <div className="flex items-center justify-between mb-2">

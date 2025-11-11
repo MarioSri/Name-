@@ -507,7 +507,7 @@ export const DocumentTracker: React.FC<DocumentTrackerProps> = ({ userRole, onVi
         submittedByRole: (doc as any).submittedByRole,
         submittedByDesignation: (doc as any).submittedByDesignation,
         recipientIds: (doc as any).recipientIds,
-        workflowSteps: doc.workflow?.steps
+        workflowSteps: doc.workflow?.steps || []
       });
     };
     
@@ -842,17 +842,17 @@ export const DocumentTracker: React.FC<DocumentTrackerProps> = ({ userRole, onVi
                   <div className="space-y-2">
                     <div className="flex justify-between text-sm">
                       <span>Workflow Progress</span>
-                      <span>{document.workflow.progress}%</span>
+                      <span>{document.workflow?.progress ?? 0}%</span>
                     </div>
-                    <Progress value={document.workflow.progress} className="h-2" />
+                    <Progress value={document.workflow?.progress ?? 0} className="h-2" />
                     <p className="text-sm text-muted-foreground">
-                      Current Step: {document.workflow.currentStep}
+                      Current Step: {document.workflow?.currentStep ?? 'N/A'}
                     </p>
                   </div>
 
                   {/* Workflow Steps */}
                   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-2">
-                    {document.workflow.steps.map((step, index) => (
+                    {(document.workflow?.steps || []).map((step, index) => (
                       <div key={index} className="flex items-center gap-2 text-sm">
                         {/* Show red X for rejected steps */}
                         {step.status === 'rejected' && <XCircle className="h-4 w-4 text-red-600" />}
@@ -927,7 +927,7 @@ export const DocumentTracker: React.FC<DocumentTrackerProps> = ({ userRole, onVi
                       {(() => {
                         const currentSignedCount = document.signedBy?.length || 0;
                         const totalRecipients = (document as any).totalRecipients || 
-                          document.workflow.steps.filter(step => 
+                          (document.workflow?.steps || []).filter(step => 
                             step.name !== 'Submission' && step.assignee !== document.submittedBy
                           ).length;
                         
