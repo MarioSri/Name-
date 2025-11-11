@@ -1,9 +1,12 @@
 import express from 'express';
 import { supabase } from '../config/supabase';
+import { pinataStorage } from '../services/pinataService';
+import { faceDatabase } from '../services/faceDatabase';
+import axios from 'axios';
 
 const router = express.Router();
 
-// Face verification endpoint
+// Face verification endpoint with IPFS
 router.post('/verify', async (req, res) => {
   try {
     const { userId, capturedImage } = req.body;
@@ -12,38 +15,38 @@ router.post('/verify', async (req, res) => {
       return res.status(400).json({ error: 'Missing required fields' });
     }
 
-    // Fetch stored face embedding from Supabase
-    const { data: userData, error: fetchError } = await supabase
-      .from('user_profiles')
-      .select('face_embedding')
-      .eq('id', userId)
-      .single();
-
-    if (fetchError || !userData?.face_embedding) {
-      return res.status(404).json({ error: 'User profile not found' });
+    // Get IPFS hash for user
+    const ipfsHash = await faceDatabase.getFaceHash(userId);
+    if (!ipfsHash) {
+      return res.status(404).json({ error: 'No face data found for user' });
     }
 
-    // Convert captured image to embedding (using face recognition service)
-    const capturedEmbedding = await generateFaceEmbedding(capturedImage);
+    // Call DeepFace IPFS server for verification
+    const deepfaceResponse = await axios.post('http://localhost:5000/verify', {
+      img1_path: capturedImage,
+      user_id: userId,
+      model_name: 'VGG-Face',
+      detector_backend: 'opencv'
+    });
 
-    // Compare embeddings
-    const similarity = cosineSimilarity(userData.face_embedding, capturedEmbedding);
-    const threshold = 0.6; // Adjust based on accuracy requirements
-
-    const matched = similarity >= threshold;
+    const { verified, distance, threshold } = deepfaceResponse.data;
 
     // Log verification attempt
     await supabase.from('face_auth_logs').insert({
       user_id: userId,
-      matched,
-      similarity_score: similarity,
+      matched: verified,
+      distance: distance,
+      threshold: threshold,
+      ipfs_hash: ipfsHash,
       timestamp: new Date().toISOString()
     });
 
     res.json({
-      matched,
-      similarity,
-      message: matched ? 'Face verified successfully' : 'Face verification failed'
+      verified,
+      distance,
+      threshold,
+      ipfsHash,
+      message: verified ? 'Face verified successfully' : 'Face verification failed'
     });
   } catch (error) {
     console.error('Face verification error:', error);
@@ -51,28 +54,75 @@ router.post('/verify', async (req, res) => {
   }
 });
 
-// Generate face embedding from image (placeholder - integrate with InsightFace/FaceNet)
-async function generateFaceEmbedding(imageBase64: string): Promise<number[]> {
-  // TODO: Integrate with face recognition model (InsightFace/FaceNet)
-  // For now, return mock embedding
-  return Array(128).fill(0).map(() => Math.random());
-}
+// Face registration endpoint with IPFS
+router.post('/register', async (req, res) => {
+  try {
+    const { userId, imageData } = req.body;
 
-// Calculate cosine similarity between two embeddings
-function cosineSimilarity(a: number[], b: number[]): number {
-  if (a.length !== b.length) return 0;
-  
-  let dotProduct = 0;
-  let normA = 0;
-  let normB = 0;
-  
-  for (let i = 0; i < a.length; i++) {
-    dotProduct += a[i] * b[i];
-    normA += a[i] * a[i];
-    normB += b[i] * b[i];
+    if (!userId || !imageData) {
+      return res.status(400).json({ error: 'Missing required fields' });
+    }
+
+    // Convert base64 to buffer
+    const base64Data = imageData.replace(/^data:image\/[a-z]+;base64,/, '');
+    const imageBuffer = Buffer.from(base64Data, 'base64');
+
+    // Upload to Pinata IPFS
+    const ipfsHash = await pinataStorage.uploadFaceImage(userId, imageBuffer);
+
+    // Store mapping in database
+    await faceDatabase.storeFaceMapping(userId, ipfsHash);
+
+    res.json({
+      success: true,
+      message: `Face registered for user ${userId}`,
+      ipfsHash,
+      gatewayUrl: `https://gateway.pinata.cloud/ipfs/${ipfsHash}`
+    });
+  } catch (error) {
+    console.error('Face registration error:', error);
+    res.status(500).json({ error: 'Face registration failed' });
   }
-  
-  return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
-}
+});
+
+// List all registered faces
+router.get('/list', async (req, res) => {
+  try {
+    const faces = await faceDatabase.getAllFaceMappings();
+    res.json({
+      success: true,
+      faces
+    });
+  } catch (error) {
+    console.error('List faces error:', error);
+    res.status(500).json({ error: 'Failed to list faces' });
+  }
+});
+
+// Delete face data
+router.delete('/:userId', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    
+    // Get IPFS hash
+    const ipfsHash = await faceDatabase.getFaceHash(userId);
+    
+    if (ipfsHash) {
+      // Delete from Pinata
+      await pinataStorage.deleteFaceImage(ipfsHash);
+    }
+    
+    // Delete from database
+    await faceDatabase.deleteFaceMapping(userId);
+    
+    res.json({
+      success: true,
+      message: `Face data deleted for user ${userId}`
+    });
+  } catch (error) {
+    console.error('Delete face error:', error);
+    res.status(500).json({ error: 'Failed to delete face data' });
+  }
+});
 
 export default router;

@@ -1,53 +1,39 @@
 {
-  "name": "backend-api",
+  "name": "name-backend",
   "version": "1.0.0",
-  "description": "Backend API with Express.js, TypeScript, and Supabase",
-  "main": "dist/server.js",
+  "description": "Backend for Name Document Management System with IPFS Face Recognition",
+  "main": "src/server.ts",
   "scripts": {
-    "dev": "tsx watch src/server.ts",
+    "dev": "nodemon src/server.ts",
     "build": "tsc",
     "start": "node dist/server.js",
-    "test": "jest",
-    "test:watch": "jest --watch",
-    "lint": "eslint src/**/*.ts",
-    "lint:fix": "eslint src/**/*.ts --fix"
+    "deepface": "python deepface_server_ipfs.py",
+    "register-face": "python register_user_ipfs.py",
+    "migrate": "node -e \"console.log('Run Supabase migrations manually')\""
   },
   "dependencies": {
-    "@supabase/supabase-js": "^2.39.0",
     "express": "^4.18.2",
-    "socket.io": "^4.7.4",
-    "googleapis": "^129.0.0",
-    "resend": "^3.2.0",
     "cors": "^2.8.5",
-    "helmet": "^7.1.0",
-    "compression": "^1.7.4",
-    "express-rate-limit": "^7.1.5",
-    "joi": "^17.11.0",
-    "jsonwebtoken": "^9.0.2",
+    "dotenv": "^16.3.1",
+    "@supabase/supabase-js": "^2.38.0",
+    "axios": "^1.6.0",
+    "form-data": "^4.0.0",
     "multer": "^1.4.5-lts.1",
-    "swagger-jsdoc": "^6.2.8",
-    "swagger-ui-express": "^5.0.0"
+    "jsonwebtoken": "^9.0.2",
+    "bcryptjs": "^2.4.3",
+    "nodemailer": "^6.9.7",
+    "socket.io": "^4.7.4"
   },
   "devDependencies": {
-    "@types/express": "^4.17.21",
-    "@types/cors": "^2.8.17",
-    "@types/compression": "^1.7.5",
-    "@types/jsonwebtoken": "^9.0.5",
-    "@types/multer": "^1.4.11",
-    "@types/swagger-jsdoc": "^6.0.4",
-    "@types/swagger-ui-express": "^4.1.6",
-    "@types/jest": "^29.5.8",
-    "@types/supertest": "^6.0.2",
-    "typescript": "^5.3.2",
-    "tsx": "^4.6.2",
-    "jest": "^29.7.0",
-    "supertest": "^6.3.3",
-    "ts-jest": "^29.1.1",
-    "eslint": "^8.54.0",
-    "@typescript-eslint/eslint-plugin": "^6.12.0",
-    "@typescript-eslint/parser": "^6.12.0"
-  },
-  "engines": {
-    "node": ">=18.0.0"
+    "@types/node": "^20.8.0",
+    "@types/express": "^4.17.20",
+    "@types/cors": "^2.8.15",
+    "@types/multer": "^1.4.8",
+    "@types/jsonwebtoken": "^9.0.4",
+    "@types/bcryptjs": "^2.4.5",
+    "@types/nodemailer": "^6.4.13",
+    "typescript": "^5.2.2",
+    "nodemon": "^3.0.1",
+    "ts-node": "^10.9.1"
   }
 }
