@@ -25,20 +25,21 @@ const Analytics = () => {
     return null; // This should be handled by ProtectedRoute, but adding as safety
   }
 
-  const departmentStats = [
+  // Only show mock analytics data for Principal role
+  const departmentStats = user.role === 'principal' ? [
     { name: "Computer Science", submitted: 45, approved: 38, rejected: 7, pending: 0 },
     { name: "Electrical Engineering", submitted: 32, approved: 28, rejected: 2, pending: 2 },
     { name: "Mechanical Engineering", submitted: 28, approved: 24, rejected: 3, pending: 1 },
     { name: "Electronics & Communication", submitted: 35, approved: 30, rejected: 4, pending: 1 },
     { name: "Civil Engineering", submitted: 22, approved: 20, rejected: 1, pending: 1 }
-  ];
+  ] : [];
 
-  const monthlyTrends = [
+  const monthlyTrends = user.role === 'principal' ? [
     { month: "Oct", documents: 120, approved: 98, rejected: 15, avgTime: 2.3 },
     { month: "Nov", documents: 135, approved: 115, rejected: 12, avgTime: 2.1 },
     { month: "Dec", documents: 98, approved: 85, rejected: 8, avgTime: 1.9 },
     { month: "Jan", documents: 162, approved: 140, rejected: 17, avgTime: 2.2 }
-  ];
+  ] : [];
 
   return (
     <DashboardLayout userRole={user.role} onLogout={handleLogout}>
@@ -48,6 +49,7 @@ const Analytics = () => {
           <p className="text-muted-foreground">Comprehensive insights into document workflow performance</p>
         </div>
 
+        {user.role === 'principal' && (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
           <Card>
             <CardContent className="p-6">
@@ -118,6 +120,7 @@ const Analytics = () => {
             </CardContent>
           </Card>
         </div>
+        )}
 
         <Tabs defaultValue="overview" className="space-y-6">
           <TabsList className="grid w-full grid-cols-4">

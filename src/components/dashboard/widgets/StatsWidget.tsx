@@ -43,14 +43,14 @@ export const StatsWidget: React.FC<StatsWidgetProps> = ({
     const fetchStats = async () => {
       setLoading(true);
       
-      // Mock data based on role
-      const mockStats: DocumentStats = {
-        total: userRole === 'principal' ? 247 : userRole === 'registrar' ? 189 : userRole === 'hod' ? 67 : 23,
-        pending: userRole === 'principal' ? 18 : userRole === 'registrar' ? 12 : userRole === 'hod' ? 8 : 3,
-        approved: userRole === 'principal' ? 198 : userRole === 'registrar' ? 156 : userRole === 'hod' ? 52 : 18,
-        rejected: userRole === 'principal' ? 31 : userRole === 'registrar' ? 21 : userRole === 'hod' ? 7 : 2,
-        inReview: userRole === 'principal' ? 15 : userRole === 'registrar' ? 8 : userRole === 'hod' ? 4 : 1,
-        emergency: userRole === 'principal' ? 3 : userRole === 'registrar' ? 2 : userRole === 'hod' ? 1 : 0,
+      // Only show mock data for Principal role
+      const mockStats: DocumentStats = userRole === 'principal' ? {
+        total: 247,
+        pending: 18,
+        approved: 198,
+        rejected: 31,
+        inReview: 15,
+        emergency: 3,
         byDepartment: {
           'CSE': 45,
           'EEE': 38,
@@ -79,6 +79,17 @@ export const StatsWidget: React.FC<StatsWidgetProps> = ({
           { date: '2024-01-04', count: 35, approved: 29, rejected: 6 },
           { date: '2024-01-05', count: 42, approved: 36, rejected: 6 }
         ]
+      } : {
+        total: 0,
+        pending: 0,
+        approved: 0,
+        rejected: 0,
+        inReview: 0,
+        emergency: 0,
+        byDepartment: {},
+        byType: {},
+        byPriority: {},
+        trends: []
       };
 
       setTimeout(() => {

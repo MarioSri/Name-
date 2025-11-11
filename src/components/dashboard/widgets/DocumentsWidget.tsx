@@ -171,7 +171,8 @@ export const DocumentsWidget: React.FC<DocumentsWidgetProps> = ({
           approvalCard: approval  // Store original approval card
         }));
         
-        const staticPendingDocs = [
+        // Only show static mock data for Principal role
+        const staticPendingDocs = userRole === 'principal' ? [
           {
             id: 'faculty-meeting',
             title: 'Faculty Meeting Minutes – Q4 2024',
@@ -228,7 +229,7 @@ export const DocumentsWidget: React.FC<DocumentsWidgetProps> = ({
             requiresAction: true,
             escalationLevel: 0
           }
-        ];
+        ] : [];
         
         // Combine stored and static documents, then filter by recipient visibility
         allPendingDocs = [...approvalDocuments, ...staticPendingDocs];
@@ -466,19 +467,6 @@ export const DocumentsWidget: React.FC<DocumentsWidgetProps> = ({
                   }
                 }}
               >
-                {/* Emergency indicator */}
-                {(doc.status === 'emergency' || doc.priority === 'emergency' || doc.approvalCard?.isEmergency) && (
-                  <>
-                    <div className="absolute top-2 right-2">
-                      <Badge variant="destructive" className="animate-pulse">
-                        <AlertTriangle className="w-3 h-3 mr-1" />
-                        EMERGENCY
-                      </Badge>
-                    </div>
-                    <div className="absolute top-2 left-2 w-3 h-3 bg-red-500 rounded-full animate-ping" />
-                  </>
-                )}
-                
                 <div className="flex items-start justify-between mb-2">
                   <div className="flex-1 min-w-0">
                     <h4 className={cn(

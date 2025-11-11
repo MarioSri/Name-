@@ -14,12 +14,15 @@ import { useToast } from "@/hooks/use-toast";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { ExternalNotificationDispatcher } from "@/services/ExternalNotificationDispatcher";
+import { isUserInRecipients, findUserStepInWorkflow } from "@/utils/recipientMatching";
+import { useRealTimeDocuments } from "@/hooks/useRealTimeDocuments";
 import isJpg from 'is-jpg';
 
 const Approvals = () => {
   const { user, logout } = useAuth();
   const { toast } = useToast();
   const navigate = useNavigate();
+  const { approvalCards, approveDocument, rejectDocument, loading, error } = useRealTimeDocuments();
   const [showLiveMeetingModal, setShowLiveMeetingModal] = useState(false);
   const [selectedDocument, setSelectedDocument] = useState({ id: '', type: 'letter', title: '' });
   const [showDocumenso, setShowDocumenso] = useState(false);
@@ -690,16 +693,78 @@ const Approvals = () => {
   }
 
   const [pendingApprovals, setPendingApprovals] = useState<any[]>([]);
+  const [realTimePendingApprovals, setRealTimePendingApprovals] = useState<any[]>([]);
   
-  // Load pending approvals on component mount
+  // Use real-time approval cards
   useEffect(() => {
-    const stored = JSON.parse(localStorage.getItem('pending-approvals') || '[]');
-    setPendingApprovals(stored);
-  }, []);
+    setRealTimePendingApprovals(approvalCards);
+  }, [approvalCards]);
   
-  const handleAcceptDocument = (docId: string) => {
+  // Load pending approvals and subscribe to real-time updates (fallback)
+  useEffect(() => {
+    let subscription: any = null;
+    
+    const loadApprovals = async () => {
+      try {
+        const { supabaseWorkflowService } = await import('@/services/SupabaseWorkflowService');
+        const cards = await supabaseWorkflowService.getApprovalCards(user?.id);
+        const stored = JSON.parse(localStorage.getItem('pending-approvals') || '[]');
+        const combined = [...cards, ...stored];
+        setPendingApprovals(combined);
+        if (approvalCards.length === 0) {
+          setRealTimePendingApprovals(combined);
+        }
+      } catch (error) {
+        console.error('Failed to load approval cards:', error);
+        const stored = JSON.parse(localStorage.getItem('pending-approvals') || '[]');
+        setPendingApprovals(stored);
+        if (approvalCards.length === 0) {
+          setRealTimePendingApprovals(stored);
+        }
+      }
+    };
+    
+    loadApprovals();
+    
+    // Subscribe to real-time updates
+    (async () => {
+      try {
+        const { supabaseWorkflowService } = await import('@/services/SupabaseWorkflowService');
+        subscription = supabaseWorkflowService.subscribeToApprovalCards(user?.id || '', (payload) => {
+          console.log('Real-time approval card update:', payload);
+          loadApprovals();
+        });
+      } catch (error) {
+        console.error('Failed to subscribe to real-time updates:', error);
+      }
+    })();
+    
+    return () => {
+      if (subscription) {
+        subscription.unsubscribe();
+      }
+    };
+  }, [user, approvalCards.length]);
+  
+  const handleAcceptDocument = async (docId: string) => {
+    try {
+      await approveDocument(docId, comments[docId]?.join(' '));
+      
+      toast({
+        title: "Document Approved",
+        description: "Document has been approved successfully",
+      });
+    } catch (error) {
+      console.error('Failed to approve document:', error);
+      // Fallback to original logic
+      handleAcceptDocumentFallback(docId);
+    }
+  };
+  
+  const handleAcceptDocumentFallback = (docId: string) => {
     // Find the document in pending approvals
-    const doc = pendingApprovals.find(d => d.id === docId) || 
+    const doc = realTimePendingApprovals.find(d => d.id === docId) || 
+                pendingApprovals.find(d => d.id === docId) || 
                 staticPendingDocs.find(d => d.id === docId);
     
     if (doc) {
@@ -1021,7 +1086,7 @@ const Approvals = () => {
     }
   };
   
-  const handleRejectDocument = (docId: string) => {
+  const handleRejectDocument = async (docId: string) => {
     const userComments = comments[docId];
     if (!userComments || userComments.length === 0) {
       toast({
@@ -1032,8 +1097,27 @@ const Approvals = () => {
       return;
     }
     
+    try {
+      await rejectDocument(docId, userComments.join(' '));
+      
+      toast({
+        title: "Document Rejected",
+        description: "Document has been rejected successfully",
+        variant: "destructive"
+      });
+    } catch (error) {
+      console.error('Failed to reject document:', error);
+      // Fallback to original logic
+      handleRejectDocumentFallback(docId);
+    }
+  };
+  
+  const handleRejectDocumentFallback = (docId: string) => {
+    const userComments = comments[docId];
+    
     // Find the document in pending approvals
-    const doc = pendingApprovals.find(d => d.id === docId) || 
+    const doc = realTimePendingApprovals.find(d => d.id === docId) || 
+                pendingApprovals.find(d => d.id === docId) || 
                 staticPendingDocs.find(d => d.id === docId);
     
     if (doc) {
@@ -1397,7 +1481,8 @@ const Approvals = () => {
     }
   };
   
-  const staticPendingDocs = [
+  // Only show static mock cards for Principal role
+  const staticPendingDocs = user.role === 'principal' ? [
     {
       id: 'faculty-meeting',
       title: 'Faculty Meeting Minutes – Q4 2024',
@@ -1434,7 +1519,7 @@ const Approvals = () => {
       priority: 'normal',
       description: 'Comprehensive guidelines for research methodology standards and academic review processes.'
     }
-  ];
+  ] : [];
   
   // Test function to verify recipient matching
   const testRecipientMatching = () => {
@@ -1495,7 +1580,7 @@ const Approvals = () => {
   }, []);
 
   // Helper function to check if current user is in recipients list
-  const isUserInRecipients = (doc: any): boolean => {
+  const isUserInRecipientsLocal = (doc: any): boolean => {
     // If no recipients specified, show to everyone (for backward compatibility)
     if ((!doc.recipients || doc.recipients.length === 0) && (!doc.recipientIds || doc.recipientIds.length === 0)) {
       console.log('✅ No recipients filter - showing card:', doc.title);
@@ -1507,66 +1592,61 @@ const Approvals = () => {
     
     console.log(`🔍 Checking card "${doc.title}" for user: ${currentUserName} (${currentUserRole})`);
     
-    // Use recipientIds if available (from Document Management), otherwise use recipients
-    const recipientsToCheck = doc.recipientIds || doc.recipients || [];
-    console.log('📋 Recipients to check:', recipientsToCheck);
-    
-    const isMatch = recipientsToCheck.some((recipient: string) => {
-      const recipientLower = recipient.toLowerCase();
-      const userNameLower = currentUserName.toLowerCase();
-      const userRoleLower = currentUserRole.toLowerCase();
+    // Check recipientIds first (most reliable)
+    if (doc.recipientIds && doc.recipientIds.length > 0) {
+      console.log('📋 Checking recipientIds:', doc.recipientIds);
       
-      // If checking recipient IDs (from Document Management)
-      if (doc.recipientIds) {
-        // Match by role in recipient ID
-        const roleMatches = [
-          userRoleLower === 'principal' && recipientLower.includes('principal'),
-          userRoleLower === 'registrar' && recipientLower.includes('registrar'),
-          userRoleLower === 'dean' && recipientLower.includes('dean'),
-          userRoleLower === 'hod' && recipientLower.includes('hod'),
-          userRoleLower === 'program-head' && recipientLower.includes('program-department-head'),
-          userRoleLower === 'controller' && recipientLower.includes('controller'),
-          userRoleLower === 'cdc' && recipientLower.includes('cdc'),
-          // Department matching for faculty/students
-          user?.department && recipientLower.includes(user.department.toLowerCase()),
-          user?.branch && recipientLower.includes(user.branch.toLowerCase())
-        ];
+      const matchesRecipientId = doc.recipientIds.some((recipientId: string) => {
+        const recipientLower = recipientId.toLowerCase();
+        const userRoleLower = currentUserRole.toLowerCase();
         
-        if (roleMatches.some(match => match)) {
-          console.log(`✅ Role ID match: ${recipient} matches role ${currentUserRole}`);
-          return true;
-        }
-      } else {
-        // If checking display names (legacy cards)
-        // Direct name match
-        if (recipientLower.includes(userNameLower) && userNameLower.length > 2) {
-          console.log(`✅ Name match: ${recipient} contains ${currentUserName}`);
-          return true;
-        }
+        // Simple matching for all roles
+        const isMatch = recipientLower.includes(userRoleLower) ||
+                       recipientLower.includes('principal') && userRoleLower === 'principal' ||
+                       recipientLower.includes('registrar') && userRoleLower === 'registrar' ||
+                       recipientLower.includes('hod') && userRoleLower === 'hod' ||
+                       recipientLower.includes('program head') && userRoleLower === 'dean';
         
-        // Role-based matching with display names
-        const roleMatches = [
-          userRoleLower === 'principal' && (recipientLower.includes('principal') || recipientLower.includes('dr. robert')),
-          userRoleLower === 'registrar' && (recipientLower.includes('registrar') || recipientLower.includes('prof. sarah')),
-          userRoleLower === 'dean' && (recipientLower.includes('dean') || recipientLower.includes('dr. maria')),
-          userRoleLower === 'hod' && (recipientLower.includes('hod') || recipientLower.includes('head of department')),
-          userRoleLower === 'program-head' && (recipientLower.includes('program') && recipientLower.includes('head')),
-          userRoleLower === 'controller' && recipientLower.includes('controller'),
-          userRoleLower === 'cdc' && recipientLower.includes('cdc'),
-          recipientLower.includes(userRoleLower)
-        ];
-        
-        if (roleMatches.some(match => match)) {
-          console.log(`✅ Role match: ${recipient} matches role ${currentUserRole}`);
-          return true;
-        }
+        console.log(`  "${recipientId}" -> ${isMatch ? 'MATCH' : 'NO MATCH'}`);
+        return isMatch;
+      });
+      
+      if (matchesRecipientId) {
+        console.log('✅ Matches recipientIds');
+        return true;
       }
-      
-      return false;
-    });
+    }
     
-    console.log(`${isMatch ? '✅' : '❌'} Final result for "${doc.title}": ${isMatch ? 'SHOW' : 'HIDE'}`);
-    return isMatch;
+    // Check display names (legacy support)
+    if (doc.recipients && doc.recipients.length > 0) {
+      console.log('📋 Checking recipients:', doc.recipients);
+      
+      const matchesDisplayName = doc.recipients.some((recipient: string) => {
+        const recipientLower = recipient.toLowerCase();
+        const userNameLower = currentUserName.toLowerCase();
+        const userRoleLower = currentUserRole.toLowerCase();
+        
+        // Simple matching for names and roles
+        const isMatch = recipient.includes(currentUserName) ||
+                       userNameLower && recipientLower.includes(userNameLower) ||
+                       recipientLower.includes(userRoleLower) ||
+                       recipientLower.includes('principal') && userRoleLower === 'principal' ||
+                       recipientLower.includes('registrar') && userRoleLower === 'registrar' ||
+                       recipientLower.includes('hod') && userRoleLower === 'hod' ||
+                       recipientLower.includes('dean') && userRoleLower === 'dean';
+        
+        console.log(`  "${recipient}" -> ${isMatch ? 'MATCH' : 'NO MATCH'}`);
+        return isMatch;
+      });
+      
+      if (matchesDisplayName) {
+        console.log('✅ Matches display names');
+        return true;
+      }
+    }
+    
+    console.log('❌ No matches found');
+    return false;
   };
 
   // Helper function to check if current user should see a shared comment
@@ -1837,7 +1917,8 @@ const Approvals = () => {
     setDocumensoDocument(null);
   };
 
-  const recentApprovals = [
+  // Only show static approval history for Principal role
+  const recentApprovals = user.role === 'principal' ? [
     {
       id: 10,
       title: "Academic Standards Review Report",
@@ -1904,7 +1985,7 @@ const Approvals = () => {
       description: "Proposal to update computer science curriculum with modern AI and machine learning modules",
       comment: "Well-structured curriculum update that addresses current industry needs. Implementation timeline is reasonable and faculty training plan is comprehensive."
     }
-  ];
+  ] : [];
 
   return (
     <DashboardLayout userRole={user.role} onLogout={handleLogout}>
@@ -1922,7 +2003,7 @@ const Approvals = () => {
                   <Clock className="h-6 w-6 text-warning" />
                 </div>
                 <div>
-                  <p className="text-2xl font-bold">{pendingApprovals.filter(doc => isUserInRecipients(doc)).length + 4}</p>
+                  <p className="text-2xl font-bold">{realTimePendingApprovals.length + 4}</p>
                   <p className="text-sm text-muted-foreground">Pending Approvals</p>
                 </div>
               </div>
@@ -1973,10 +2054,10 @@ const Approvals = () => {
               </CardHeader>
               <CardContent>
                 <div className="space-y-4">
-                  {/* Dynamic Submitted Documents */}
-                  {pendingApprovals.filter(doc => {
-                    // First check: Is user in recipients?
-                    const isInRecipients = isUserInRecipients(doc);
+                  {/* Real-time Approval Cards */}
+                  {realTimePendingApprovals.filter(doc => {
+                    // Step 1: Check if user is in recipients
+                    const isInRecipients = isUserInRecipientsLocal(doc);
                     console.log(`📄 Card "${doc.title}" - Is in recipients: ${isInRecipients}`);
                     
                     if (!isInRecipients) {
@@ -1984,48 +2065,32 @@ const Approvals = () => {
                       return false;
                     }
                     
-                    // 🆕 Check if this is an Approval Chain with Bypass card
-                    if (doc.source === 'approval-chain-bypass' && doc.routingType) {
-                      console.log(`  🔀 Approval Chain Bypass - Routing Type: ${doc.routingType.toUpperCase()}`);
+                    // Step 2: Check workflow-specific logic
+                    
+                    // For parallel mode cards, always show to all recipients
+                    if (doc.isParallel || doc.routingType === 'parallel' || doc.routingType === 'bidirectional') {
+                      console.log('  ⚡ PARALLEL MODE - Showing card to all recipients');
+                      return true;
+                    }
+                    
+                    // For approval chain bypass cards
+                    if (doc.source === 'approval-chain-bypass') {
+                      console.log(`  🔀 Approval Chain Bypass - Routing: ${doc.routingType}`);
                       
                       // Get tracking card for workflow state
                       const trackingCards = JSON.parse(localStorage.getItem('submitted-documents') || '[]');
                       const trackingCard = trackingCards.find((tc: any) => tc.id === doc.trackingCardId || tc.id === doc.id);
                       
                       if (trackingCard?.workflow?.steps) {
-                        const currentUserRole = user?.role?.toLowerCase() || '';
-                        const currentUserName = user?.name?.toLowerCase() || '';
+                        const userStep = findUserStepInWorkflow(
+                          { name: user?.name, role: user?.role, department: user?.department, branch: user?.branch },
+                          trackingCard.workflow.steps
+                        );
                         
-                        // Find user's step in workflow
-                        const userStepIndex = trackingCard.workflow.steps.findIndex((step: any) => {
-                          const assigneeLower = step.assignee.toLowerCase();
-                          return (
-                            assigneeLower.includes(currentUserRole) ||
-                            assigneeLower.includes(currentUserName) ||
-                            (user?.department && assigneeLower.includes(user.department.toLowerCase())) ||
-                            (user?.branch && assigneeLower.includes(user.branch.toLowerCase()))
-                          );
-                        });
-                        
-                        if (userStepIndex !== -1) {
-                          const userStep = trackingCard.workflow.steps[userStepIndex];
-                          
-                          if (doc.routingType === 'sequential') {
-                            // Sequential: Only show if it's user's turn
-                            const shouldShow = userStep.status === 'current';
-                            console.log(`  🔄 SEQUENTIAL - User step status: ${userStep.status}, Show: ${shouldShow}`);
-                            return shouldShow;
-                          } else if (doc.routingType === 'parallel' || doc.routingType === 'bidirectional') {
-                            // Parallel/Bi-Directional: Show to all recipients simultaneously
-                            const shouldShow = userStep.status === 'current' || userStep.status === 'pending';
-                            console.log(`  ⚡ ${doc.routingType.toUpperCase()} - Show to all recipients: ${shouldShow}`);
-                            return shouldShow;
-                          } else if (doc.routingType === 'reverse') {
-                            // Reverse: Sequential from highest authority down
-                            const shouldShow = userStep.status === 'current';
-                            console.log(`  🔙 REVERSE - User step status: ${userStep.status}, Show: ${shouldShow}`);
-                            return shouldShow;
-                          }
+                        if (userStep) {
+                          const shouldShow = userStep.step.status === 'current' || userStep.step.status === 'pending';
+                          console.log(`  🔄 User step status: ${userStep.step.status}, Show: ${shouldShow}`);
+                          return shouldShow;
                         }
                       }
                       
@@ -2034,66 +2099,37 @@ const Approvals = () => {
                       return true;
                     }
                     
-                    // Check if this is a parallel mode card (Emergency Management feature)
-                    if (doc.isParallel) {
-                      console.log('  ⚡ PARALLEL MODE - Showing card to all recipients simultaneously');
-                      return true; // All recipients see card at once
-                    }
-                    
-                    // Second check: For SEQUENTIAL workflow, is it user's turn?
-                    // Only applicable for cards with tracking (Document Management / Emergency Management)
+                    // For cards with tracking (sequential workflow)
                     if (doc.trackingCardId) {
                       const trackingCards = JSON.parse(localStorage.getItem('submitted-documents') || '[]');
                       const trackingCard = trackingCards.find((tc: any) => tc.id === doc.trackingCardId);
                       
                       if (trackingCard?.workflow?.steps) {
-                        // Check if tracking card is also in parallel mode
+                        // If tracking card is parallel, show to all
                         if (trackingCard.workflow.isParallel) {
                           console.log('  ⚡ Tracking card is PARALLEL - Showing to all recipients');
                           return true;
                         }
                         
-                        // SEQUENTIAL MODE: Check if it's user's turn
-                        const currentUserRole = user?.role?.toLowerCase() || '';
-                        const currentUserName = user?.name?.toLowerCase() || '';
+                        // Sequential workflow: check if it's user's turn
+                        const userStep = findUserStepInWorkflow(
+                          { name: user?.name, role: user?.role, department: user?.department, branch: user?.branch },
+                          trackingCard.workflow.steps
+                        );
                         
-                        // Find user's step in workflow
-                        const userStepIndex = trackingCard.workflow.steps.findIndex((step: any) => {
-                          const assigneeLower = step.assignee.toLowerCase();
-                          return (
-                            assigneeLower.includes(currentUserRole) ||
-                            assigneeLower.includes(currentUserName) ||
-                            (user?.department && assigneeLower.includes(user.department.toLowerCase())) ||
-                            (user?.branch && assigneeLower.includes(user.branch.toLowerCase()))
-                          );
-                        });
-                        
-                        if (userStepIndex !== -1) {
-                          const userStep = trackingCard.workflow.steps[userStepIndex];
-                          const shouldShow = userStep.status === 'current';
-                          
-                          console.log(`  🔄 SEQUENTIAL workflow check:`, {
-                            userRole: currentUserRole,
-                            userStepIndex,
-                            userStepStatus: userStep.status,
-                            shouldShow
-                          });
-                          
+                        if (userStep) {
+                          const shouldShow = userStep.step.status === 'current';
+                          console.log(`  🔄 SEQUENTIAL - User step status: ${userStep.step.status}, Show: ${shouldShow}`);
                           return shouldShow;
                         } else {
-                          console.log(`  ⚠️ User not found in workflow steps, showing card by default`);
-                          return true;
+                          console.log('  ⚠️ User not found in workflow, showing as fallback');
+                          return true; // Show as fallback if user not found in workflow but is in recipients
                         }
                       }
                     }
                     
                     // For non-tracking cards or legacy cards, show if user is in recipients
-                    console.log('  ✅ Non-sequential card or no tracking, showing card');
-                    if (doc.recipientIds) {
-                      console.log('  🆔 Using recipient IDs for filtering:', doc.recipientIds);
-                    } else {
-                      console.log('  🆔 Using display names for filtering:', doc.recipients);
-                    }
+                    console.log('  ✅ Non-workflow card, showing to recipient');
                     return true;
                   }).map((doc) => (
                     <Card key={doc.id} className={`hover:shadow-md transition-shadow ${doc.isEmergency ? 'border-destructive bg-red-50 animate-pulse' : ''}`}>
@@ -3371,12 +3407,8 @@ const Approvals = () => {
                     const isEmergency = doc.isEmergency || doc.priority === 'emergency' || doc.title === 'Course Curriculum Update';
                     
                     return (
-                    <Card key={doc.id} className={`relative hover:shadow-md transition-shadow ${isEmergency ? 'border-destructive bg-red-50 animate-pulse' : ''}`}>
+                    <Card key={doc.id} className={`relative hover:shadow-md transition-shadow ${isEmergency ? 'border-destructive bg-red-50' : ''}`}>
                       <CardContent className="p-6">
-                        {/* Emergency indicator - blinking light for emergency cards */}
-                        {isEmergency && (
-                          <div className="absolute top-2 left-2 w-3 h-3 bg-red-500 rounded-full animate-ping" />
-                        )}
                         
                         <div className="flex flex-col lg:flex-row gap-6">
                           <div className="flex-1 space-y-4">

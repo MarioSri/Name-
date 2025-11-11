@@ -4,9 +4,22 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { useAuth } from '@/contexts/AuthContext';
-import { useNotifications } from '@/contexts/NotificationContext';
-import { useResponsive } from '@/hooks/useResponsive';
+import { useSocket } from '@/hooks/useSocket';
+import { apiService } from '@/services/api';
 import { cn } from '@/lib/utils';
+
+// Simple responsive hook
+const useResponsive = () => {
+  const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
+  
+  useEffect(() => {
+    const handleResize = () => setIsMobile(window.innerWidth < 768);
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+  
+  return { isMobile };
+};
 import {
   Bell,
   CheckCircle2,
@@ -29,6 +42,17 @@ interface NotificationsWidgetProps {
   isSelected?: boolean;
 }
 
+interface Notification {
+  id: string;
+  title: string;
+  message: string;
+  type: string;
+  created_at: string;
+  delivered_via: string[];
+  read?: boolean;
+  urgent?: boolean;
+}
+
 export const NotificationsWidget: React.FC<NotificationsWidgetProps> = ({
   userRole,
   permissions,
@@ -37,9 +61,11 @@ export const NotificationsWidget: React.FC<NotificationsWidgetProps> = ({
   isSelected
 }) => {
   const { user } = useAuth();
-  const { notifications, unreadCount, markAsRead, removeNotification } = useNotifications();
+  const { onNotification } = useSocket();
   const { isMobile } = useResponsive();
+  const [notifications, setNotifications] = useState<Notification[]>([]);
   const [filter, setFilter] = useState<'all' | 'unread' | 'urgent'>('all');
+  const [unreadCount, setUnreadCount] = useState(0);
 
   const getNotificationIcon = (type: string) => {
     switch (type) {
@@ -50,6 +76,40 @@ export const NotificationsWidget: React.FC<NotificationsWidgetProps> = ({
       case 'meeting': return <Calendar className="w-4 h-4 text-blue-500" />;
       default: return <Bell className="w-4 h-4 text-muted-foreground" />;
     }
+  };
+
+  useEffect(() => {
+    loadNotifications();
+    
+    const unsubscribe = onNotification((notification) => {
+      setNotifications(prev => [notification, ...prev]);
+      setUnreadCount(prev => prev + 1);
+    });
+
+    return unsubscribe;
+  }, []);
+
+  const loadNotifications = async () => {
+    try {
+      const response = await apiService.getUserNotifications();
+      if (response.success) {
+        setNotifications(response.data);
+        setUnreadCount(response.data.filter((n: any) => !n.read).length);
+      }
+    } catch (error) {
+      console.error('Failed to load notifications:', error);
+    }
+  };
+
+  const markAsRead = (id: string) => {
+    setNotifications(prev => 
+      prev.map(n => n.id === id ? { ...n, read: true } : n)
+    );
+    setUnreadCount(prev => Math.max(0, prev - 1));
+  };
+
+  const removeNotification = (id: string) => {
+    setNotifications(prev => prev.filter(n => n.id !== id));
   };
 
   const getFilteredNotifications = () => {
@@ -66,9 +126,10 @@ export const NotificationsWidget: React.FC<NotificationsWidgetProps> = ({
   const filteredNotifications = getFilteredNotifications();
   const urgentCount = notifications.filter(n => n.urgent || n.type === 'emergency').length;
 
-  const getTimeAgo = (timestamp: Date) => {
+  const getTimeAgo = (timestamp: string) => {
     const now = new Date();
-    const diff = now.getTime() - timestamp.getTime();
+    const notificationTime = new Date(timestamp);
+    const diff = now.getTime() - notificationTime.getTime();
     const minutes = Math.floor(diff / 60000);
     const hours = Math.floor(minutes / 60);
     const days = Math.floor(hours / 24);
@@ -124,18 +185,17 @@ export const NotificationsWidget: React.FC<NotificationsWidgetProps> = ({
       </CardHeader>
       
       <CardContent>
-        <ScrollArea className={cn(isMobile ? "h-48" : "h-64")}>
+        <ScrollArea className="h-64">
           <div className="space-y-2">
-            {filteredNotifications.slice(0, isMobile ? 5 : 8).map((notification, index) => (
+            {filteredNotifications.slice(0, 8).map((notification, index) => (
               <div
                 key={notification.id}
                 className={cn(
-                  "p-3 border rounded-lg hover:bg-accent transition-all cursor-pointer animate-fade-in",
+                  "p-3 border rounded-lg hover:bg-accent transition-all cursor-pointer",
                   !notification.read && "bg-primary/5 border-l-4 border-l-primary",
                   notification.urgent && "border-warning bg-warning/5",
                   notification.type === 'emergency' && "border-destructive bg-destructive/5"
                 )}
-                style={{ animationDelay: `${index * 50}ms` }}
                 onClick={() => markAsRead(notification.id)}
               >
                 <div className="flex items-start gap-3">
@@ -170,23 +230,21 @@ export const NotificationsWidget: React.FC<NotificationsWidgetProps> = ({
                       </Button>
                     </div>
                     
-                    <p className={cn(
-                      "text-muted-foreground mt-1 line-clamp-2",
-                      isMobile ? "text-xs" : "text-sm"
-                    )}>
+                    <p className="text-muted-foreground mt-1 line-clamp-2 text-sm">
                       {notification.message}
                     </p>
                     
                     <div className="flex items-center justify-between mt-2">
                       <span className="text-xs text-muted-foreground">
-                        {getTimeAgo(notification.timestamp)}
+                        {getTimeAgo(notification.created_at)}
                       </span>
-                      {notification.actionUrl && (
-                        <Button variant="ghost" size="sm" className="h-6 text-xs">
-                          <ArrowRight className="w-3 h-3 mr-1" />
-                          View
-                        </Button>
-                      )}
+                      <div className="flex gap-1">
+                        {notification.delivered_via?.map((method) => (
+                          <Badge key={method} variant="outline" className="text-xs">
+                            {method}
+                          </Badge>
+                        ))}
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -196,7 +254,7 @@ export const NotificationsWidget: React.FC<NotificationsWidgetProps> = ({
             {filteredNotifications.length === 0 && (
               <div className="text-center py-8 text-muted-foreground">
                 <Bell className="w-8 h-8 mx-auto mb-2 opacity-50" />
-                <p className={cn(isMobile ? "text-sm" : "text-base")}>
+                <p className="text-base">
                   {filter === 'all' ? 'No notifications' : `No ${filter} notifications`}
                 </p>
               </div>
@@ -207,44 +265,26 @@ export const NotificationsWidget: React.FC<NotificationsWidgetProps> = ({
         {/* Quick Stats */}
         <div className="grid grid-cols-3 gap-2 pt-2 border-t">
           <div className="text-center p-2 bg-muted/30 rounded">
-            <p className={cn(
-              "font-bold text-primary",
-              isMobile ? "text-lg" : "text-xl"
-            )}>
+            <p className="font-bold text-primary text-xl">
               {notifications.length}
             </p>
-            <p className={cn(
-              "text-muted-foreground",
-              isMobile ? "text-xs" : "text-sm"
-            )}>
+            <p className="text-muted-foreground text-sm">
               Total
             </p>
           </div>
           <div className="text-center p-2 bg-muted/30 rounded">
-            <p className={cn(
-              "font-bold text-warning",
-              isMobile ? "text-lg" : "text-xl"
-            )}>
+            <p className="font-bold text-warning text-xl">
               {unreadCount}
             </p>
-            <p className={cn(
-              "text-muted-foreground",
-              isMobile ? "text-xs" : "text-sm"
-            )}>
+            <p className="text-muted-foreground text-sm">
               Unread
             </p>
           </div>
           <div className="text-center p-2 bg-muted/30 rounded">
-            <p className={cn(
-              "font-bold text-destructive",
-              isMobile ? "text-lg" : "text-xl"
-            )}>
+            <p className="font-bold text-destructive text-xl">
               {urgentCount}
             </p>
-            <p className={cn(
-              "text-muted-foreground",
-              isMobile ? "text-xs" : "text-sm"
-            )}>
+            <p className="text-muted-foreground text-sm">
               Urgent
             </p>
           </div>

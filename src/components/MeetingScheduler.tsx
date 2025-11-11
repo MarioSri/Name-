@@ -251,11 +251,14 @@ export function MeetingScheduler({ userRole, className }: MeetingSchedulerProps)
   const loadMeetings = useCallback(async () => {
     setLoading(true);
     try {
-      // Load meetings from localStorage
       const storedMeetings = loadMeetingsFromStorage();
       
-      // Mock meetings data - replace with actual API call
-      const mockMeetings: Meeting[] = [
+      // Load real recipients for mock meetings
+      const { supabaseWorkflowService } = await import('@/services/SupabaseWorkflowService');
+      const recipients = await supabaseWorkflowService.getRecipients();
+      
+      // Create mock meetings with real recipients
+      const mockMeetings: Meeting[] = recipients.length > 0 ? [
         {
           id: "meeting-001",
           title: "Faculty Recruitment Board Meeting",
@@ -263,15 +266,20 @@ export function MeetingScheduler({ userRole, className }: MeetingSchedulerProps)
           date: "2024-01-18",
           time: "10:00",
           duration: 90,
-          attendees: [
-            { id: "1", name: "Dr. Principal", email: "principal@iaoms.edu", role: "Principal", status: "accepted", isRequired: true, canEdit: false },
-            { id: "2", name: "Prof. Registrar", email: "registrar@iaoms.edu", role: "Registrar", status: "accepted", isRequired: true, canEdit: false },
-            { id: "3", name: "Dr. HOD-CSE", email: "hod.cse@iaoms.edu", role: "HOD", department: "Computer Science", status: "accepted" as const, isRequired: true, canEdit: true }
-          ],
+          attendees: recipients.slice(0, 3).map(r => ({
+            id: r.user_id,
+            name: r.name,
+            email: r.email,
+            role: r.role,
+            department: r.department,
+            status: "accepted" as const,
+            isRequired: true,
+            canEdit: false
+          })),
           location: "google-meet",
           type: "online",
           status: "confirmed",
-          documents: ["recruitment-policy-2024.pdf", "application-summary.xlsx"],
+          documents: ["recruitment-policy-2024.pdf"],
           createdBy: user?.id || "user-1",
           createdAt: new Date("2024-01-15T09:00:00Z"),
           updatedAt: new Date("2024-01-16T14:30:00Z"),
@@ -299,36 +307,14 @@ export function MeetingScheduler({ userRole, className }: MeetingSchedulerProps)
             whatsapp: false,
             reminders: [
               { type: 'email', timing: 1440, enabled: true },
-              { type: 'push', timing: 60, enabled: true },
-              { type: 'email', timing: 10, enabled: true }
+              { type: 'push', timing: 60, enabled: true }
             ],
             escalation: {
               enabled: true,
               escalateAfterHours: 48,
-              escalateTo: ["dean@iaoms.edu"],
+              escalateTo: [],
               autoApprove: false
             }
-          },
-          approvalWorkflow: {
-            isRequired: true,
-            approvers: [
-              {
-                id: "approval-1",
-                approverId: "dean-001",
-                approverName: "Dr. Dean",
-                approverRole: "Dean",
-                order: 1,
-                status: "approved",
-                responseTime: new Date("2024-01-16T10:00:00Z"),
-                comments: "Approved for recruitment process",
-                isRequired: true
-              }
-            ],
-            currentStep: 1,
-            status: "approved",
-            requestedAt: new Date("2024-01-15T09:00:00Z"),
-            approvedAt: new Date("2024-01-16T10:00:00Z"),
-            comments: []
           }
         },
         {
@@ -338,15 +324,20 @@ export function MeetingScheduler({ userRole, className }: MeetingSchedulerProps)
           date: "2024-01-19",
           time: "14:00",
           duration: 120,
-          attendees: [
-            { id: "1", name: "Dr. Principal", email: "principal@iaoms.edu", role: "Principal", status: "accepted", isRequired: true, canEdit: false },
-            { id: "4", name: "Mr. Finance Head", email: "finance@iaoms.edu", role: "Finance Head", status: "accepted", isRequired: true, canEdit: false },
-            { id: "2", name: "Prof. Registrar", email: "registrar@iaoms.edu", role: "Registrar", status: "no-response", isRequired: true, canEdit: false }
-          ],
+          attendees: recipients.slice(0, 3).map(r => ({
+            id: r.user_id,
+            name: r.name,
+            email: r.email,
+            role: r.role,
+            department: r.department,
+            status: "accepted" as const,
+            isRequired: true,
+            canEdit: false
+          })),
           location: "zoom",
           type: "online",
           status: "scheduled",
-          documents: ["budget-report-q1.pdf", "financial-analysis.xlsx"],
+          documents: ["budget-report-q1.pdf"],
           createdBy: user?.id || "user-1",
           createdAt: new Date("2024-01-12T11:00:00Z"),
           updatedAt: new Date("2024-01-17T16:45:00Z"),
@@ -379,7 +370,7 @@ export function MeetingScheduler({ userRole, className }: MeetingSchedulerProps)
             sms: false,
             whatsapp: false,
             reminders: [
-              { type: 'email', timing: 2880, enabled: true }, // 48h
+              { type: 'email', timing: 2880, enabled: true },
               { type: 'push', timing: 60, enabled: true }
             ],
             escalation: {
@@ -390,27 +381,14 @@ export function MeetingScheduler({ userRole, className }: MeetingSchedulerProps)
             }
           }
         }
-      ];
+      ] : [];
       
-      // Combine stored meetings with mock meetings
       const combinedMeetings = [...storedMeetings, ...mockMeetings];
-      
-      // Remove duplicates based on ID
       const uniqueMeetings = combinedMeetings.filter((meeting, index, self) =>
         index === self.findIndex((m) => m.id === meeting.id)
       );
       
       console.log(`[MeetingScheduler] 📊 Loaded ${uniqueMeetings.length} meetings (${storedMeetings.length} from storage, ${mockMeetings.length} mock)`);
-      
-      // Debug: Log stored meetings details
-      if (storedMeetings.length > 0) {
-        console.log('[MeetingScheduler] 💾 Stored meetings:', storedMeetings.map(m => ({
-          id: m.id,
-          title: m.title,
-          date: m.date,
-          createdBy: m.createdBy
-        })));
-      }
       
       setAllMeetings(uniqueMeetings);
     } catch (error) {
@@ -464,18 +442,28 @@ export function MeetingScheduler({ userRole, className }: MeetingSchedulerProps)
     "22:00", "22:15", "22:30", "22:45", "23:00", "23:15", "23:30"
   ];
 
-  const availableAttendees = [
-    { id: "principal", name: "Dr. Principal", email: "principal@iaoms.edu", role: "Principal" },
-    { id: "registrar", name: "Prof. Registrar", email: "registrar@iaoms.edu", role: "Registrar" },
-    { id: "hod-cse", name: "Dr. HOD-CSE", email: "hod.cse@iaoms.edu", role: "HOD", department: "Computer Science" },
-    { id: "hod-eee", name: "Dr. HOD-EEE", email: "hod.eee@iaoms.edu", role: "HOD", department: "Electrical Engineering" },
-    { id: "hod-ece", name: "Dr. HOD-ECE", email: "hod.ece@iaoms.edu", role: "HOD", department: "Electronics Engineering" },
-    { id: "hod-mech", name: "Dr. HOD-MECH", email: "hod.mech@iaoms.edu", role: "HOD", department: "Mechanical Engineering" },
-    { id: "dean", name: "Dr. Dean", email: "dean@iaoms.edu", role: "Dean" },
-    { id: "finance", name: "Mr. Finance Head", email: "finance@iaoms.edu", role: "Finance Head" },
-    { id: "academic", name: "Dr. Academic Cell", email: "academic@iaoms.edu", role: "Academic Cell" },
-    { id: "librarian", name: "Ms. Librarian", email: "library@iaoms.edu", role: "Librarian" }
-  ];
+  const [availableAttendees, setAvailableAttendees] = useState<any[]>([]);
+  
+  // Load real recipients from Supabase
+  useEffect(() => {
+    const loadAttendees = async () => {
+      try {
+        const { supabaseWorkflowService } = await import('@/services/SupabaseWorkflowService');
+        const recipients = await supabaseWorkflowService.getRecipients();
+        const attendees = recipients.map(r => ({
+          id: r.user_id,
+          name: r.name,
+          email: r.email,
+          role: r.role,
+          department: r.department
+        }));
+        setAvailableAttendees(attendees);
+      } catch (error) {
+        console.error('Failed to load attendees:', error);
+      }
+    };
+    loadAttendees();
+  }, []);
 
   const meetingPlatforms: { value: MeetingPlatform; label: string; icon: React.ReactNode }[] = [
     { value: "google-meet", label: "Google Meet", icon: <Video className="w-4 h-4" /> },

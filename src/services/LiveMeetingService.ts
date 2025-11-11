@@ -313,20 +313,23 @@ class LiveMeetingService {
   }
 
   private async mockGetAvailableParticipants(currentUserRole: string): Promise<any[]> {
+    // Use real recipients from Supabase
+    const { supabaseWorkflowService } = await import('@/services/SupabaseWorkflowService');
+    const recipients = await supabaseWorkflowService.getRecipients();
+    
     const allowedRoles = LIVE_MEETING_PERMISSIONS[currentUserRole] || [];
     
-    const mockUsers = [
-      { id: 'user_1', name: 'Dr. Smith', role: 'principal', email: 'smith@institution.edu', department: 'Administration' },
-      { id: 'user_2', name: 'Prof. Johnson', role: 'hod_cse', email: 'johnson@institution.edu', department: 'Computer Science' },
-      { id: 'user_3', name: 'Dr. Williams', role: 'registrar', email: 'williams@institution.edu', department: 'Administration' },
-      { id: 'user_4', name: 'Prof. Brown', role: 'hod_eee', email: 'brown@institution.edu', department: 'Electrical Engineering' },
-      { id: 'user_5', name: 'Dr. Davis', role: 'dean', email: 'davis@institution.edu', department: 'Academic Affairs' },
-      { id: 'user_6', name: 'Dr. Sarah Johnson', role: 'employee', email: 'sarah.johnson@institution.edu', department: 'Mechanical Engineering' }
-    ];
-
-    return mockUsers.filter(user => 
-      allowedRoles.includes(user.role) || allowedRoles.includes('all')
-    );
+    return recipients
+      .map(r => ({
+        id: r.user_id,
+        name: r.name,
+        role: r.role.toLowerCase().replace(/\s+/g, '_'),
+        email: r.email,
+        department: r.department || 'General'
+      }))
+      .filter(user => 
+        allowedRoles.includes(user.role) || allowedRoles.includes('all')
+      );
   }
 }
 

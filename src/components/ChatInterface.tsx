@@ -14,6 +14,7 @@ import { Separator } from '@/components/ui/separator';
 import { useAuth } from '@/contexts/AuthContext';
 import { useToast } from '@/hooks/use-toast';
 import { DecentralizedChatService } from '@/services/DecentralizedChatService';
+import { supabaseWorkflowService } from '@/services/SupabaseWorkflowService';
 import { 
   ChatChannel, 
   ChatMessage, 
@@ -92,10 +93,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ className, channel
   const [channels, setChannels] = useState<ChatChannel[]>([]);
   const [activeChannel, setActiveChannel] = useState<ChatChannel | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [users, setUsers] = useState<ChatUser[]>([
-    { id: 'user-1', fullName: 'Dr. Principal', role: 'Principal', avatar: '' },
-    { id: 'user-2', fullName: 'Prof. Registrar', role: 'Registrar', avatar: '' }
-  ]);
+  const [users, setUsers] = useState<ChatUser[]>([]);
+  const [availableRecipients, setAvailableRecipients] = useState<Array<{id: string; name: string; role: string}>>([]);
   const [notifications, setNotifications] = useState<ChatNotification[]>([]);
   const [typingUsers, setTypingUsers] = useState<string[]>([]);
   const [connectionStatus, setConnectionStatus] = useState<string>('connecting');
@@ -197,6 +196,24 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ className, channel
     ];
   }, [user]);
 
+  // Load real recipients from database
+  useEffect(() => {
+    const loadRecipients = async () => {
+      try {
+        const data = await supabaseWorkflowService.getRecipients();
+        const recipients = data.map(r => ({
+          id: r.user_id,
+          name: r.name,
+          role: r.role
+        }));
+        setAvailableRecipients(recipients);
+      } catch (error) {
+        console.error('Failed to load recipients:', error);
+      }
+    };
+    loadRecipients();
+  }, []);
+
   // Optimized initialization for instant loading
   useEffect(() => {
     if (!user) return;
@@ -239,12 +256,23 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ className, channel
       }
     };
     
+    // Subscribe to connection status
+    const handleConnected = () => setConnectionStatus('connected');
+    const handleDisconnected = () => setConnectionStatus('disconnected');
+    const handleOfflineMode = () => setConnectionStatus('offline');
+    
+    chatService.on('connected', handleConnected);
+    chatService.on('disconnected', handleDisconnected);
+    chatService.on('offline-mode', handleOfflineMode);
     window.addEventListener('storage', handleStorageChange);
     
     return () => {
+      chatService.off('connected', handleConnected);
+      chatService.off('disconnected', handleDisconnected);
+      chatService.off('offline-mode', handleOfflineMode);
       window.removeEventListener('storage', handleStorageChange);
     };
-  }, [user, defaultChannels, defaultUsers]);
+  }, [user, defaultChannels, defaultUsers, chatService]);
 
   // Memoized sample messages for instant loading
   const getSampleMessages = useCallback((channelId: string) => [
@@ -324,6 +352,33 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ className, channel
       loadMessages(activeChannel.id);
     }
   }, [activeChannel, loadMessages]);
+
+  // Subscribe to real-time message updates
+  useEffect(() => {
+    const handleMessageReceived = (message: ChatMessage) => {
+      if (message.channelId === activeChannel?.id) {
+        setMessages(prev => [...prev, message]);
+        scrollToBottom(true);
+      }
+    };
+
+    const handleUserTyping = (data: any) => {
+      if (data.channelId === activeChannel?.id && data.userId !== user?.id) {
+        setTypingUsers(prev => [...new Set([...prev, data.userId])]);
+        setTimeout(() => {
+          setTypingUsers(prev => prev.filter(id => id !== data.userId));
+        }, 3000);
+      }
+    };
+
+    chatService.on('message-received', handleMessageReceived);
+    chatService.on('user-typing', handleUserTyping);
+
+    return () => {
+      chatService.off('message-received', handleMessageReceived);
+      chatService.off('user-typing', handleUserTyping);
+    };
+  }, [activeChannel, chatService, user, scrollToBottom]);
 
   // Optimized cleanup function for auto-delete messages after 24 hours
   const cleanupMessages = useCallback(() => {
@@ -420,6 +475,10 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ className, channel
       setMessageInput('');
       setReplyingTo(null);
       scrollToBottom(true);
+      
+      if (isTyping) {
+        setIsTyping(false);
+      }
     } catch (error) {
       toast({
         title: 'Error',
@@ -1682,7 +1741,7 @@ Generated on: ${new Date().toLocaleString()}`;
             <div>
               <label className="text-sm font-medium mb-2 block">Add Recipients</label>
               <ScrollArea className="h-64 border rounded-md p-2">
-                {[{id: 'principal', name: 'Dr. Principal', role: 'Principal'}, {id: 'registrar', name: 'Prof. Registrar', role: 'Registrar'}, {id: 'hod-cse', name: 'Dr. HOD-CSE', role: 'HOD'}].map((person) => (
+                {availableRecipients.map((person) => (
                   <div key={person.id} className="flex items-center justify-between p-2 hover:bg-accent rounded-md">
                     <div className="flex items-center gap-2">
                       <Avatar className="w-8 h-8">
@@ -1789,7 +1848,7 @@ Generated on: ${new Date().toLocaleString()}`;
             <div>
               <label className="text-sm font-medium mb-2 block">Available Staff</label>
               <ScrollArea className="h-64 border rounded-md p-2">
-                {[{id: 'principal', name: 'Dr. Principal', role: 'Principal'}, {id: 'registrar', name: 'Prof. Registrar', role: 'Registrar'}, {id: 'hod-cse', name: 'Dr. HOD-CSE', role: 'HOD'}, {id: 'hod-eee', name: 'Dr. HOD-EEE', role: 'HOD'}, {id: 'dean', name: 'Dr. Dean', role: 'Dean'}].map((person) => (
+                {availableRecipients.map((person) => (
                   <div key={person.id} className="flex items-center justify-between p-2 hover:bg-accent rounded-md">
                     <div className="flex items-center gap-2">
                       <Avatar className="w-8 h-8">

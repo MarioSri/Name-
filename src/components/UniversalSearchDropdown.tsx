@@ -5,6 +5,8 @@ import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { useNavigate } from 'react-router-dom';
 import { cn } from '@/lib/utils';
+import { apiService } from '@/services/api';
+import { useSocket } from '@/hooks/useSocket';
 import {
   Search,
   FileText,
@@ -48,142 +50,47 @@ export const UniversalSearchDropdown: React.FC<UniversalSearchDropdownProps> = (
   const searchRef = useRef<HTMLDivElement>(null);
   const navigate = useNavigate();
 
-  // Dynamic search data fetcher
-  const getSearchData = (): SearchResult[] => {
-    const searchResults: SearchResult[] = [];
-    
-    // Add sample data for testing
-    searchResults.push({
-      id: 'qa-framework',
-      title: 'Quality Assurance Framework - Implementation Plan',
-      description: 'QA implementation strategy',
-      type: 'document',
-      section: 'Track Documents',
-      path: '/track-documents#qa-framework',
-      icon: FileText,
-      cardId: 'qa-framework'
-    });
-    
-    // Get Track Documents from localStorage or use sample data
-    const trackDocuments = JSON.parse(localStorage.getItem('trackDocuments') || '[{"id":"qa-framework","title":"Quality Assurance Framework - Implementation Plan","description":"Comprehensive QA implementation strategy"}]');
-    trackDocuments.forEach((doc: any) => {
-      searchResults.push({
-        id: doc.id,
-        title: doc.title || doc.name,
-        description: doc.description || doc.status || '',
-        type: 'document',
-        section: 'Track Documents',
-        path: `/track-documents#${doc.id}`,
-        icon: FileText,
-        cardId: doc.id
-      });
-    });
-    
-    // Get Approval Center data
-    const pendingApprovals = JSON.parse(localStorage.getItem('pendingApprovals') || '[{"id":"budget-approval","title":"Budget Approval Request","description":"Q1 budget allocation"}]');
-    pendingApprovals.forEach((approval: any) => {
-      searchResults.push({
-        id: approval.id,
-        title: approval.title || approval.name,
-        description: approval.description || approval.status || '',
-        type: 'approval',
-        section: 'Pending Approvals',
-        path: `/approvals#${approval.id}`,
-        icon: CheckCircle,
-        cardId: approval.id
-      });
-    });
-    
-    const approvalHistory = JSON.parse(localStorage.getItem('approvalHistory') || '[{"id":"completed-approval","title":"Marketing Campaign Approved","description":"Approved last week"}]');
-    approvalHistory.forEach((approval: any) => {
-      searchResults.push({
-        id: approval.id,
-        title: approval.title || approval.name,
-        description: approval.description || approval.status || '',
-        type: 'approval',
-        section: 'Approval History',
-        path: `/approvals#${approval.id}`,
-        icon: CheckCircle,
-        cardId: approval.id
-      });
-    });
-    
-    // Get LiveMeet+ meetings
-    const meetings = JSON.parse(localStorage.getItem('meetings') || '[{"id":"team-standup","title":"Team Standup Meeting","description":"Daily sync at 9:00 AM"}]');
-    meetings.forEach((meeting: any) => {
-      searchResults.push({
-        id: meeting.id,
-        title: meeting.title || meeting.name,
-        description: meeting.description || meeting.time || '',
-        type: 'meeting',
-        section: 'LiveMeet+',
-        path: `/messages?tab=livemeet#${meeting.id}`,
-        icon: Users,
-        cardId: meeting.id
-      });
-    });
-    
-    // Get Notes & Reminders
-    const reminders = JSON.parse(localStorage.getItem('reminders') || '[{"id":"project-deadline","title":"Project Deadline Reminder","description":"Due tomorrow"}]');
-    reminders.forEach((reminder: any) => {
-      searchResults.push({
-        id: reminder.id,
-        title: reminder.title || reminder.name,
-        description: reminder.description || reminder.dueDate || '',
-        type: 'reminder',
-        section: 'Upcoming Reminders',
-        path: `/messages?tab=notes#${reminder.id}`,
-        icon: Clock,
-        cardId: reminder.id
-      });
-    });
-    
-    const stickyNotes = JSON.parse(localStorage.getItem('stickyNotes') || '[{"id":"review-notes","title":"Review contract terms","description":"Legal feedback needed"}]');
-    stickyNotes.forEach((note: any) => {
-      searchResults.push({
-        id: note.id,
-        title: note.title || note.content?.substring(0, 50),
-        description: note.description || note.content || '',
-        type: 'note',
-        section: 'Sticky Notes',
-        path: `/messages?tab=notes#${note.id}`,
-        icon: StickyNote,
-        cardId: note.id
-      });
-    });
-    
-    // Get Department Chat channels
-    const channels = JSON.parse(localStorage.getItem('chatChannels') || '[{"id":"engineering","name":"Engineering Team","description":"24 members online"}]');
-    channels.forEach((channel: any) => {
-      searchResults.push({
-        id: channel.id,
-        title: channel.name || channel.title,
-        description: channel.description || `${channel.memberCount || 0} members`,
-        type: 'channel',
-        section: 'Department Chat',
-        path: `/messages?tab=chat#${channel.id}`,
-        icon: Hash,
-        cardId: channel.id
-      });
-    });
-    
-    // Get Calendar events
-    const calendarEvents = JSON.parse(localStorage.getItem('calendarEvents') || '[{"id":"client-meeting","title":"Client Presentation","description":"Tomorrow 2:00 PM"}]');
-    calendarEvents.forEach((event: any) => {
-      searchResults.push({
-        id: event.id,
-        title: event.title || event.name,
-        description: event.description || event.date || '',
-        type: 'calendar',
-        section: event.type === 'meeting' ? 'Upcoming Meetings' : 'Calendar Events',
-        path: `/calendar#${event.id}`,
-        icon: Calendar,
-        cardId: event.id
-      });
-    });
-    
-    console.log('Search data:', searchResults.length, 'items');
-    return searchResults;
+  const { onDocumentUpdate } = useSocket();
+  const [isLoading, setIsLoading] = useState(false);
+
+  // Real-time search with API
+  const performSearch = async (searchQuery: string) => {
+    if (!searchQuery.trim()) {
+      setResults([]);
+      return;
+    }
+
+    setIsLoading(true);
+    try {
+      const response = await apiService.search(searchQuery);
+      if (response.success) {
+        const searchResults = response.data.map((item: any) => ({
+          ...item,
+          icon: getIconForType(item.type),
+          cardId: item.id
+        }));
+        setResults(searchResults);
+      }
+    } catch (error) {
+      console.error('Search failed:', error);
+      setResults([]);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const getIconForType = (type: string) => {
+    const icons = {
+      document: FileText,
+      approval: CheckCircle,
+      meeting: Users,
+      reminder: Clock,
+      note: StickyNote,
+      channel: Hash,
+      calendar: Calendar,
+      user: Users
+    };
+    return icons[type as keyof typeof icons] || FileText;
   };
 
   useEffect(() => {
@@ -208,18 +115,23 @@ export const UniversalSearchDropdown: React.FC<UniversalSearchDropdownProps> = (
   }, [isExpanded, query]);
 
   useEffect(() => {
-    if (query.trim()) {
-      const searchData = getSearchData();
-      const filtered = searchData.filter(item =>
-        item.title.toLowerCase().includes(query.toLowerCase()) ||
-        item.description.toLowerCase().includes(query.toLowerCase()) ||
-        item.section.toLowerCase().includes(query.toLowerCase())
-      );
-      setResults(filtered);
-    } else {
-      setResults([]);
-    }
+    const debounceTimer = setTimeout(() => {
+      performSearch(query);
+    }, 300);
+
+    return () => clearTimeout(debounceTimer);
   }, [query]);
+
+  useEffect(() => {
+    const unsubscribe = onDocumentUpdate((data) => {
+      // Refresh search results when documents are updated
+      if (query.trim()) {
+        performSearch(query);
+      }
+    });
+
+    return unsubscribe;
+  }, [query, onDocumentUpdate]);
 
   const handleSearch = (searchQuery: string) => {
     setQuery(searchQuery);
@@ -382,7 +294,14 @@ export const UniversalSearchDropdown: React.FC<UniversalSearchDropdownProps> = (
                 </div>
               )}
 
-              {query.trim() !== '' && results.length === 0 && (
+              {query.trim() !== '' && isLoading && (
+                <div className="text-center py-4 text-muted-foreground">
+                  <div className="w-6 h-6 mx-auto mb-2 border-2 border-gray-300 border-t-blue-600 rounded-full animate-spin"></div>
+                  <p className="text-sm">Searching...</p>
+                </div>
+              )}
+
+              {query.trim() !== '' && !isLoading && results.length === 0 && (
                 <div className="text-center py-4 text-muted-foreground">
                   <Search className="w-8 h-8 mx-auto mb-2 opacity-50" />
                   <p className="text-sm">No results found for "{query}"</p>

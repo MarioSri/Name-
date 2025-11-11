@@ -29,9 +29,16 @@ const Documents = () => {
     
     // Load user profile from Personal Information
     const userProfile = JSON.parse(localStorage.getItem('user-profile') || '{}');
-    const currentUserName = userProfile.name || user?.name || 'User';
+    const currentUserName = userProfile.name || user?.name || user?.email?.split('@')[0] || 'User';
     const currentUserDept = userProfile.department || user?.department || 'Department';
     const currentUserDesignation = userProfile.designation || user?.role || 'Employee';
+    
+    console.log('📝 [Document Submission] User Info:', {
+      name: currentUserName,
+      department: currentUserDept,
+      designation: currentUserDesignation,
+      role: user?.role
+    });
     
     // Convert files to base64 for localStorage storage
     const convertFilesToBase64 = async (files: File[]) => {
@@ -170,6 +177,7 @@ const Documents = () => {
       submittedBy: currentUserName,
       submittedByDepartment: currentUserDept,
       submittedByDesignation: currentUserDesignation,
+      submittedByRole: user?.role, // Add role for matching
       submittedDate: new Date().toISOString().split('T')[0],
       status: 'pending',
       priority: data.priority === 'normal' ? 'Normal Priority' : 
@@ -194,10 +202,21 @@ const Documents = () => {
     existingCards.unshift(trackingCard);
     localStorage.setItem('submitted-documents', JSON.stringify(existingCards));
     
+    console.log('✅ [Document Submission] Tracking card created:', {
+      id: trackingCard.id,
+      title: trackingCard.title,
+      submittedBy: trackingCard.submittedBy,
+      submittedByDesignation: trackingCard.submittedByDesignation,
+      submittedByRole: trackingCard.submittedByRole
+    });
+    
     // Create approval card(s) for Approval Center
-    console.log('📄 Creating Document Management Approval Card(s)');
-    console.log('  📋 Selected recipient IDs:', data.recipients);
-    console.log('  📎 Document assignments:', data.assignments);
+    console.log('\n' + '='.repeat(80));
+    console.log('📄 CREATING APPROVAL CARDS');
+    console.log('='.repeat(80));
+    console.log('📋 Selected recipient IDs:', data.recipients);
+    console.log('📎 Document assignments:', data.assignments);
+    console.log('👤 Current user:', currentUserName, '(', currentUserDesignation, ')');
     
     const existingApprovals = JSON.parse(localStorage.getItem('pending-approvals') || '[]');
     const approvalCards: any[] = [];
@@ -256,9 +275,11 @@ const Documents = () => {
       
       const recipientNames = data.recipients.map((id: string) => {
         const name = getRecipientName(id);
-        console.log(`  🔄 Converting: ${id} → ${name}`);
+        console.log(`🔄 Converting recipient ID: ${id} → ${name}`);
         return name;
       });
+      
+      console.log('\n✅ All recipient names:', recipientNames);
       
       const approvalCard = {
         id: trackingCard.id,
@@ -279,19 +300,23 @@ const Documents = () => {
       approvalCards.push(approvalCard);
       existingApprovals.unshift(approvalCard);
       
-      console.log('✅ Approval card created:', {
-        id: approvalCard.id,
-        title: approvalCard.title,
-        recipients: approvalCard.recipients,
-        recipientIds: approvalCard.recipientIds,
-        recipientCount: approvalCard.recipients.length
-      });
+      console.log('\n✅ APPROVAL CARD CREATED:');
+      console.log('   ID:', approvalCard.id);
+      console.log('   Title:', approvalCard.title);
+      console.log('   Recipients (names):', approvalCard.recipients);
+      console.log('   Recipient IDs:', approvalCard.recipientIds);
+      console.log('   Total recipients:', approvalCard.recipients.length);
+      console.log('   Files:', approvalCard.files?.length || 0);
     }
     
     // Save all approval cards to localStorage
     localStorage.setItem('pending-approvals', JSON.stringify(existingApprovals));
     
-    console.log(`✅ ${approvalCards.length} Approval card(s) saved to localStorage. Total cards:`, existingApprovals.length);
+    console.log('\n💾 SAVED TO LOCALSTORAGE:');
+    console.log(`   New cards created: ${approvalCards.length}`);
+    console.log(`   Total cards in storage: ${existingApprovals.length}`);
+    console.log('\n📋 All approval card IDs:', approvalCards.map(c => c.id));
+    console.log('='.repeat(80));
     
     // Dispatch events for real-time updates
     console.log('📢 Dispatching document-approval-created event for tracking');
@@ -323,13 +348,13 @@ const Documents = () => {
       newValue: JSON.stringify(existingApprovals)
     }));
     
-    console.log('✅ Document Management submission complete:', {
-      trackingCardId: trackingCard.id,
-      approvalCardsCreated: approvalCards.length,
-      approvalCardIds: approvalCards.map(c => c.id),
-      recipientCount: data.recipients.length,
-      eventsDispatched: ['document-approval-created', 'approval-card-created', 'document-submitted']
-    });
+    console.log('\n✅ SUBMISSION COMPLETE:');
+    console.log('   Tracking Card ID:', trackingCard.id);
+    console.log('   Approval Cards Created:', approvalCards.length);
+    console.log('   Approval Card IDs:', approvalCards.map(c => c.id));
+    console.log('   Total Recipients:', data.recipients.length);
+    console.log('   Events Dispatched: document-approval-created, approval-card-created, document-submitted');
+    console.log('='.repeat(80) + '\n');
     
     // Send notifications to recipients based on their preferences
     console.log('📬 Sending notifications to recipients...');

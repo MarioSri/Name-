@@ -35,34 +35,94 @@ import { useToast } from "@/hooks/use-toast";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { PersonalInformationForm, PersonalInfoData } from "@/components/PersonalInformationForm";
+import { supabaseWorkflowService } from "@/services/SupabaseWorkflowService";
 
 const Profile = () => {
   const { user } = useAuth();
   const [isEditing, setIsEditing] = useState(false);
   const { theme, setTheme } = useTheme();
+  const [loading, setLoading] = useState(true);
   
   const [profileData, setProfileData] = useState<PersonalInfoData>({
-    name: "Dr. Rajesh Kumar",
-    email: "rajesh.kumar@hitam.org",
-    phone: "+91-9876543210",
-    department: "Computer Science & Engineering",
-    employeeId: "HITAM-CSE-001",
-    designation: "Head of Department",
-    bio: "Experienced educator and researcher with 15+ years in computer science education and administration.",
+    name: "",
+    email: "",
+    phone: "",
+    department: "",
+    employeeId: "",
+    designation: "",
+    bio: "",
     avatar: ""
   });
 
-  // Load saved profile data from localStorage
+  // Load profile data from Supabase recipients table
   useEffect(() => {
-    const savedProfile = localStorage.getItem('user-profile');
-    if (savedProfile) {
+    const loadProfileData = async () => {
+      if (!user) return;
+      
+      setLoading(true);
       try {
-        const parsedProfile = JSON.parse(savedProfile);
-        setProfileData(parsedProfile);
+        // Try to get recipient data from Supabase
+        const recipient = await supabaseWorkflowService.getRecipientById(user.id || user.email);
+        
+        if (recipient) {
+          // Map recipient data to profile data
+          setProfileData({
+            name: recipient.name || user.name || "",
+            email: recipient.email || user.email || "",
+            phone: recipient.phone || "",
+            department: recipient.department || user.department || "",
+            employeeId: recipient.user_id || "",
+            designation: recipient.role || user.role || "",
+            bio: "",
+            avatar: ""
+          });
+        } else {
+          // Fallback to user context data
+          setProfileData({
+            name: user.name || "",
+            email: user.email || "",
+            phone: "",
+            department: user.department || "",
+            employeeId: user.id || "",
+            designation: user.role || "",
+            bio: "",
+            avatar: ""
+          });
+        }
+        
+        // Check localStorage for additional data (avatar, bio)
+        const savedProfile = localStorage.getItem('user-profile');
+        if (savedProfile) {
+          try {
+            const parsedProfile = JSON.parse(savedProfile);
+            setProfileData(prev => ({
+              ...prev,
+              avatar: parsedProfile.avatar || prev.avatar,
+              bio: parsedProfile.bio || prev.bio
+            }));
+          } catch (error) {
+            console.error('Error loading saved profile:', error);
+          }
+        }
       } catch (error) {
-        console.error('Error loading saved profile:', error);
+        console.error('Error loading recipient data:', error);
+        // Fallback to user context data on error
+        setProfileData({
+          name: user.name || "",
+          email: user.email || "",
+          phone: "",
+          department: user.department || "",
+          employeeId: user.id || "",
+          designation: user.role || "",
+          bio: "",
+          avatar: ""
+        });
+      } finally {
+        setLoading(false);
       }
-    }
+    };
+    
+    loadProfileData();
 
     // Load notification preferences
     const savedNotificationPrefs = localStorage.getItem(`user-preferences-${user?.id || 'default'}`);
@@ -74,7 +134,7 @@ const Profile = () => {
         console.error('Error loading notification preferences:', error);
       }
     }
-  }, [user?.id]);
+  }, [user]);
 
   const [preferences, setPreferences] = useState({
     emailNotifications: true,
@@ -177,6 +237,26 @@ const Profile = () => {
     }
   };
 
+  if (loading) {
+    return (
+      <DashboardLayout userRole={user?.role || 'employee'} onLogout={handleLogout}>
+        <div className="container mx-auto p-4 md:p-6 max-w-4xl">
+          <div className="mb-6">
+            <h1 className="text-2xl md:text-3xl font-bold text-foreground mb-2">Profile Settings</h1>
+            <p className="text-muted-foreground">Loading profile data...</p>
+          </div>
+          <div className="space-y-4">
+            {[...Array(3)].map((_, i) => (
+              <div key={i} className="animate-pulse">
+                <div className="h-32 bg-muted rounded-lg"></div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </DashboardLayout>
+    );
+  }
+
   return (
     <DashboardLayout userRole={user?.role || 'employee'} onLogout={handleLogout}>
       <div className="container mx-auto p-4 md:p-6 max-w-4xl">
@@ -189,7 +269,7 @@ const Profile = () => {
           <TabsList className="grid w-full grid-cols-2 md:grid-cols-4 h-12">
             <TabsTrigger value="profile" className="text-sm md:text-base">Profile</TabsTrigger>
             <TabsTrigger value="preferences" className="text-sm md:text-base">Preferences</TabsTrigger>
-            <TabsTrigger value="security" className="text-sm md:text-base">Security</TabsTrigger>
+            <TabsTrigger value="security" className="text-sm md:text-base" disabled>Security</TabsTrigger>
             <TabsTrigger value="account" className="text-sm md:text-base">Account</TabsTrigger>
           </TabsList>
 
@@ -358,7 +438,7 @@ const Profile = () => {
                   </div>
 
                   {/* SMS Alerts */}
-                  <div className="flex items-center justify-between py-2">
+                  <div className="flex items-center justify-between py-2 opacity-50">
                     <div className="flex items-center gap-3">
                       <Phone className="w-5 h-5 text-muted-foreground" />
                       <div>
@@ -368,12 +448,12 @@ const Profile = () => {
                     </div>
                     <Switch
                       checked={notificationPreferences.sms.enabled}
-                      onCheckedChange={(checked) => handleNotificationPreferenceChange('sms', 'enabled', checked)}
+                      disabled
                     />
                   </div>
 
                   {/* WhatsApp Notifications */}
-                  <div className="flex items-center justify-between py-2">
+                  <div className="flex items-center justify-between py-2 opacity-50">
                     <div className="flex items-center gap-3">
                       <MessageCircle className="w-5 h-5 text-green-600" />
                       <div>
@@ -383,7 +463,7 @@ const Profile = () => {
                     </div>
                     <Switch
                       checked={notificationPreferences.whatsapp.enabled}
-                      onCheckedChange={(checked) => handleNotificationPreferenceChange('whatsapp', 'enabled', checked)}
+                      disabled
                     />
                   </div>
                 </div>
@@ -431,8 +511,8 @@ const Profile = () => {
           </TabsContent>
 
           <TabsContent value="security" className="space-y-6">
-            {/* Security Settings */}
-            <Card className="shadow-elegant">
+            {/* Security Settings - DISABLED */}
+            <Card className="shadow-elegant opacity-50 pointer-events-none">
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
                   <Lock className="w-5 h-5" />
@@ -454,7 +534,7 @@ const Profile = () => {
                     </div>
                     <Switch
                       checked={preferences.twoFactorAuth}
-                      onCheckedChange={(checked) => handlePreferenceChange('twoFactorAuth', checked)}
+                      disabled
                     />
                   </div>
                 </div>
@@ -471,6 +551,7 @@ const Profile = () => {
                         type="password"
                         placeholder="Enter current password"
                         className="h-12 text-base"
+                        disabled
                       />
                     </div>
                     <div className="space-y-2">
@@ -480,6 +561,7 @@ const Profile = () => {
                         type="password"
                         placeholder="Enter new password"
                         className="h-12 text-base"
+                        disabled
                       />
                     </div>
                     <div className="space-y-2">
@@ -489,9 +571,10 @@ const Profile = () => {
                         type="password"
                         placeholder="Confirm new password"
                         className="h-12 text-base"
+                        disabled
                       />
                     </div>
-                    <Button variant="outline" className="h-12 px-6">
+                    <Button variant="outline" className="h-12 px-6" disabled>
                       Update Password
                     </Button>
                   </div>

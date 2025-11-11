@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -8,6 +8,7 @@ import { Label } from "@/components/ui/label";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
+import { supabaseWorkflowService } from '@/services/SupabaseWorkflowService';
 import { 
   Search, 
   ChevronDown, 
@@ -49,8 +50,7 @@ interface RecipientSelectorProps {
   maxSelections?: number;
 }
 
-const branches = ['EEE', 'MECH', 'CSE', 'ECE', 'CSM', 'CSO', 'CSD', 'CSC'];
-const years = ['1st', '2nd', '3rd', '4th'];
+
 
 // Approval Flow Hierarchy Order
 const HIERARCHY_ORDER = {
@@ -95,206 +95,46 @@ const sortRecipientsByHierarchy = (recipientIds: string[], allRecipients: Recipi
     .map(r => r.id);
 };
 
-// Mock data generation
-const generateRecipients = (userRole: string): RecipientGroup[] => {
-  const createRecipient = (name: string, role: string, dept?: string, branch?: string, year?: string): Recipient => ({
-    id: `${role.toLowerCase().replace(/\s+/g, '-')}-${name.toLowerCase().replace(/\s+/g, '-')}-${branch || ''}${year || ''}`.replace(/[-]+/g, '-'),
-    name,
-    role,
-    department: dept,
-    branch,
-    year,
-    email: `${name.toLowerCase().replace(/\s+/g, '.')}@hitam.org`
+// Group recipients by role
+const groupRecipients = (recipients: Recipient[]): RecipientGroup[] => {
+  const groups: { [key: string]: { title: string; icon: any; recipients: Recipient[] } } = {};
+
+  recipients.forEach(recipient => {
+    const role = recipient.role;
+    let groupKey = role.toLowerCase().replace(/\s+/g, '-');
+    let groupTitle = role;
+    let groupIcon = Users;
+
+    if (role === 'Principal' || role === 'Registrar' || role === 'Dean' || role === 'Chairman') {
+      groupKey = 'leadership';
+      groupTitle = 'Leadership';
+      groupIcon = Crown;
+    } else if (role === 'HOD') {
+      groupKey = 'hods';
+      groupTitle = 'HODs';
+      groupIcon = Building;
+    } else if (role === 'Program Department Head') {
+      groupKey = 'program-heads';
+      groupTitle = 'Program Department Heads';
+      groupIcon = UserCheck;
+    } else if (role.includes('CDC')) {
+      groupKey = 'cdc';
+      groupTitle = 'CDC Department';
+      groupIcon = Users;
+    }
+
+    if (!groups[groupKey]) {
+      groups[groupKey] = { title: groupTitle, icon: groupIcon, recipients: [] };
+    }
+    groups[groupKey].recipients.push(recipient);
   });
 
-  if (userRole === 'Principal') {
-    return [
-      {
-        id: 'cdc-employees',
-        title: 'CDC Department Employees',
-        icon: Users,
-        recipients: [
-          createRecipient('Dr. CDC Head', 'CDC Head', 'Career Development Center'),
-          createRecipient('Prof. CDC Coordinator', 'CDC Coordinator', 'Career Development Center'),
-          createRecipient('Ms. CDC Executive', 'CDC Executive', 'Career Development Center')
-        ]
-      },
-      {
-        id: 'leadership',
-        title: 'Leadership',
-        icon: Crown,
-        recipients: [
-          createRecipient('Dr. Robert Principal', 'Principal', 'Administration'),
-          createRecipient('Prof. Sarah Registrar', 'Registrar', 'Administration'),
-          createRecipient('Dr. Maria Dean', 'Dean', 'Academic Affairs'),
-          createRecipient('Mr. David Chairman', 'Chairman', 'Board'),
-          createRecipient('Ms. Lisa Director', 'Director (For Information)', 'Operations'),
-          createRecipient('Prof. Leadership Officer', 'Leadership', 'Administration')
-        ]
-      },
-      {
-        id: 'administrative',
-        title: 'Administrative Roles',
-        icon: UserCheck,
-        recipients: [
-          createRecipient('Dr. Robert Controller', 'Controller of Examinations', 'Examinations'),
-          createRecipient('Prof. Asst Dean', 'Asst. Dean IIIC', 'Academic Affairs'),
-          createRecipient('Mr. Michael Operations', 'Head Operations', 'Operations'),
-          createRecipient('Ms. Jennifer Librarian', 'Librarian', 'Library'),
-          createRecipient('Prof. William SSG', 'SSG', 'Student Services')
-        ]
-      },
-      {
-        id: 'faculty',
-        title: 'Faculty (All Branches & Years)',
-        icon: Users,
-        recipients: branches.flatMap(branch => 
-          years.map(year => createRecipient(`Dr. ${branch} Faculty`, 'Faculty', `${branch} Department`, branch, year))
-        )
-      },
-      {
-        id: 'program-heads',
-        title: 'Program Department Heads (All Branches)',
-        icon: UserCheck,
-        recipients: branches.map(branch => 
-          createRecipient(`Prof. ${branch} Head`, 'Program Department Head', `${branch} Department`, branch)
-        )
-      },
-      {
-        id: 'hods',
-        title: 'HODs (All Branches)',
-        icon: Building,
-        recipients: branches.map(branch => 
-          createRecipient(`Dr. ${branch} HOD`, 'HOD', `${branch} Department`, branch)
-        )
-      }
-    ];
-  } else if (userRole === 'Program Head' || userRole === 'program-head') {
-    return [
-      {
-        id: 'cdc-employees',
-        title: 'CDC Department Employees',
-        icon: Users,
-        recipients: [
-          createRecipient('Dr. CDC Head', 'CDC Head', 'Career Development Center'),
-          createRecipient('Prof. CDC Coordinator', 'CDC Coordinator', 'Career Development Center'),
-          createRecipient('Ms. CDC Executive', 'CDC Executive', 'Career Development Center')
-        ]
-      },
-      {
-        id: 'leadership',
-        title: 'Leadership',
-        icon: Crown,
-        recipients: [
-          createRecipient('Dr. Robert Principal', 'Principal', 'Administration'),
-          createRecipient('Prof. Sarah Registrar', 'Registrar', 'Administration'),
-          createRecipient('Dr. Maria Dean', 'Dean', 'Academic Affairs'),
-          createRecipient('Mr. David Chairman', 'Chairman', 'Board'),
-          createRecipient('Ms. Lisa Director', 'Director (For Information)', 'Operations'),
-          createRecipient('Prof. Leadership Officer', 'Leadership', 'Administration')
-        ]
-      },
-      {
-        id: 'administrative',
-        title: 'Administrative Roles',
-        icon: UserCheck,
-        recipients: [
-          createRecipient('Dr. Robert Controller', 'Controller of Examinations', 'Examinations'),
-          createRecipient('Prof. Asst Dean', 'Asst. Dean IIIC', 'Academic Affairs'),
-          createRecipient('Mr. Michael Operations', 'Head Operations', 'Operations'),
-          createRecipient('Ms. Jennifer Librarian', 'Librarian', 'Library'),
-          createRecipient('Prof. William SSG', 'SSG', 'Student Services')
-        ]
-      },
-      {
-        id: 'faculty',
-        title: 'Faculty (All Branches & Years)',
-        icon: Users,
-        recipients: branches.flatMap(branch => 
-          years.map(year => createRecipient(`Dr. ${branch} Faculty`, 'Faculty', `${branch} Department`, branch, year))
-        )
-      },
-      {
-        id: 'program-heads',
-        title: 'Program Department Heads (All Branches)',
-        icon: UserCheck,
-        recipients: branches.map(branch => 
-          createRecipient(`Prof. ${branch} Head`, 'Program Department Head', `${branch} Department`, branch)
-        )
-      },
-      {
-        id: 'hods',
-        title: 'HODs (All Branches)',
-        icon: Building,
-        recipients: branches.map(branch => 
-          createRecipient(`Dr. ${branch} HOD`, 'HOD', `${branch} Department`, branch)
-        )
-      }
-    ];
-  } else {
-    // Employee view - comprehensive recipients
-    return [
-      {
-        id: 'cdc-employees',
-        title: 'CDC Department Employees',
-        icon: Users,
-        recipients: [
-          createRecipient('Dr. CDC Head', 'CDC Head', 'Career Development Center'),
-          createRecipient('Prof. CDC Coordinator', 'CDC Coordinator', 'Career Development Center'),
-          createRecipient('Ms. CDC Executive', 'CDC Executive', 'Career Development Center')
-        ]
-      },
-      {
-        id: 'leadership',
-        title: 'Leadership',
-        icon: Crown,
-        recipients: [
-          createRecipient('Dr. Robert Principal', 'Principal', 'Administration'),
-          createRecipient('Prof. Sarah Registrar', 'Registrar', 'Administration'),
-          createRecipient('Dr. Maria Dean', 'Dean', 'Academic Affairs'),
-          createRecipient('Mr. David Chairman', 'Chairman', 'Board'),
-          createRecipient('Ms. Lisa Director', 'Director (For Information)', 'Operations'),
-          createRecipient('Prof. Leadership Officer', 'Leadership', 'Administration')
-        ]
-      },
-      {
-        id: 'administrative',
-        title: 'Administrative Roles',
-        icon: UserCheck,
-        recipients: [
-          createRecipient('Dr. Robert Controller', 'Controller of Examinations', 'Examinations'),
-          createRecipient('Prof. Asst Dean', 'Asst. Dean IIIC', 'Academic Affairs'),
-          createRecipient('Mr. Michael Operations', 'Head Operations', 'Operations'),
-          createRecipient('Ms. Jennifer Librarian', 'Librarian', 'Library'),
-          createRecipient('Prof. William SSG', 'SSG', 'Student Services')
-        ]
-      },
-      {
-        id: 'faculty',
-        title: 'Faculty (All Branches & Years)',
-        icon: Users,
-        recipients: branches.flatMap(branch => 
-          years.map(year => createRecipient(`Dr. ${branch} Faculty`, 'Faculty', `${branch} Department`, branch, year))
-        )
-      },
-      {
-        id: 'program-heads',
-        title: 'Program Department Heads (All Branches)',
-        icon: UserCheck,
-        recipients: branches.map(branch => 
-          createRecipient(`Prof. ${branch} Head`, 'Program Department Head', `${branch} Department`, branch)
-        )
-      },
-      {
-        id: 'hods',
-        title: 'HODs (All Branches)',
-        icon: Building,
-        recipients: branches.map(branch => 
-          createRecipient(`Dr. ${branch} HOD`, 'HOD', `${branch} Department`, branch)
-        )
-      }
-    ];
-  }
+  return Object.entries(groups).map(([id, group]) => ({
+    id,
+    title: group.title,
+    icon: group.icon,
+    recipients: group.recipients
+  }));
 };
 
 export const RecipientSelector: React.FC<RecipientSelectorProps> = ({
@@ -309,8 +149,32 @@ export const RecipientSelector: React.FC<RecipientSelectorProps> = ({
     'program-heads': false
   });
   const [useHierarchicalOrder, setUseHierarchicalOrder] = useState(true);
+  const [allRecipients, setAllRecipients] = useState<Recipient[]>([]);
+  const [loading, setLoading] = useState(true);
 
-  const recipientGroups = useMemo(() => generateRecipients(userRole), [userRole]);
+  useEffect(() => {
+    const loadRecipients = async () => {
+      try {
+        const data = await supabaseWorkflowService.getRecipients();
+        setAllRecipients(data.map(r => ({
+          id: r.user_id,
+          name: r.name,
+          email: r.email,
+          role: r.role,
+          department: r.department,
+          branch: r.branch,
+          year: r.year
+        })));
+      } catch (error) {
+        console.error('Failed to load recipients:', error);
+      } finally {
+        setLoading(false);
+      }
+    };
+    loadRecipients();
+  }, []);
+
+  const recipientGroups = useMemo(() => groupRecipients(allRecipients), [allRecipients]);
 
   const filteredGroups = useMemo(() => {
     if (!searchTerm) return recipientGroups;
@@ -520,6 +384,9 @@ export const RecipientSelector: React.FC<RecipientSelectorProps> = ({
 
         {/* Recipient Groups */}
         <ScrollArea className="h-96">
+          {loading ? (
+            <div className="text-center py-8 text-muted-foreground">Loading recipients...</div>
+          ) : (
           <div className="space-y-4">
             {filteredGroups.map((group) => {
               const IconComponent = group.icon;
@@ -653,6 +520,7 @@ export const RecipientSelector: React.FC<RecipientSelectorProps> = ({
               );
             })}
           </div>
+          )}
         </ScrollArea>
 
         {maxSelections && selectedRecipients.length >= maxSelections && (

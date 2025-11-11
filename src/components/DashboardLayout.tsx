@@ -114,7 +114,7 @@ export function DashboardLayout({ children, userRole, onLogout }: DashboardLayou
                 </div>
 
                 {/* Notifications */}
-                <NotificationCenter userRole={userRole} />
+                <NotificationCenter />
 
                 {/* Profile Settings Dropdown */}
                 <DropdownMenu>

@@ -100,7 +100,12 @@ export const CalendarWidget: React.FC<CalendarWidgetProps> = ({
       setLoading(true);
       console.log('[Calendar Widget] 🔄 Fetching meetings for user:', user.name);
       
-      const mockMeetings = [
+      // Load real recipients for mock meetings
+      const { supabaseWorkflowService } = await import('@/services/SupabaseWorkflowService');
+      const recipients = await supabaseWorkflowService.getRecipients();
+      
+      // Create mock meetings with real recipients
+      const mockMeetings = recipients.length > 0 && userRole === 'principal' ? [
         {
           id: '1',
           title: 'Faculty Recruitment Review',
@@ -108,18 +113,22 @@ export const CalendarWidget: React.FC<CalendarWidgetProps> = ({
           date: '2024-01-18',
           time: '10:00 AM',
           duration: 90,
-          attendees: [
-            { id: 'principal-001', name: 'Dr. Principal', email: 'principal@iaoms.edu', role: 'Principal', status: 'accepted', isRequired: true, canEdit: false },
-            { id: 'registrar-001', name: 'Prof. Registrar', email: 'registrar@iaoms.edu', role: 'Registrar', status: 'accepted', isRequired: true, canEdit: false },
-            { id: 'hod-cse-001', name: 'Dr. HOD-CSE', email: 'hod.cse@iaoms.edu', role: 'HOD', department: 'Computer Science', status: 'invited', isRequired: true, canEdit: false },
-            { id: 'hr-head-001', name: 'Ms. HR Head', email: 'hr@iaoms.edu', role: 'HR Head', status: 'accepted', isRequired: true, canEdit: false }
-          ],
+          attendees: recipients.slice(0, 4).map(r => ({
+            id: r.user_id,
+            name: r.name,
+            email: r.email,
+            role: r.role,
+            department: r.department,
+            status: 'accepted' as const,
+            isRequired: true,
+            canEdit: false
+          })),
           location: 'Conference Room A',
-          type: 'online',
-          status: 'confirmed',
-          priority: 'high',
+          type: 'online' as const,
+          status: 'confirmed' as const,
+          priority: 'high' as const,
           createdBy: 'principal-001',
-          category: 'recruitment',
+          category: 'recruitment' as const,
           isRecurring: false,
           tags: [],
           department: 'Administration',
@@ -134,93 +143,40 @@ export const CalendarWidget: React.FC<CalendarWidgetProps> = ({
           date: '2024-01-17',
           time: '2:00 PM',
           duration: 60,
-          attendees: [
-            { id: 'principal-001', name: 'Dr. Principal', email: 'principal@iaoms.edu', role: 'Principal', status: 'accepted', isRequired: true, canEdit: false },
-            { id: 'registrar-001', name: 'Prof. Registrar', email: 'registrar@iaoms.edu', role: 'Registrar', status: 'accepted', isRequired: true, canEdit: false },
-            { id: 'maintenance-001', name: 'Mr. Maintenance Head', email: 'maintenance@iaoms.edu', role: 'Maintenance Head', status: 'accepted', isRequired: true, canEdit: false },
-            { id: 'finance-001', name: 'Mr. Finance Head', email: 'finance@iaoms.edu', role: 'Finance Head', status: 'accepted', isRequired: true, canEdit: false }
-          ],
+          attendees: recipients.slice(0, 4).map(r => ({
+            id: r.user_id,
+            name: r.name,
+            email: r.email,
+            role: r.role,
+            department: r.department,
+            status: 'accepted' as const,
+            isRequired: true,
+            canEdit: false
+          })),
           location: 'Principal Office',
-          type: 'online',
-          status: 'confirmed',
-          priority: 'urgent',
+          type: 'online' as const,
+          status: 'confirmed' as const,
+          priority: 'urgent' as const,
           createdBy: 'principal-001',
-          category: 'emergency',
+          category: 'emergency' as const,
           isRecurring: false,
           tags: [],
           department: 'Administration',
           documents: [],
           createdAt: new Date('2024-01-16T08:00:00Z'),
           updatedAt: new Date('2024-01-16T08:00:00Z')
-        },
-        {
-          id: '3',
-          title: 'Monthly Academic Review - EEE',
-          description: 'Review academic performance and curriculum updates',
-          date: '2024-01-19',
-          time: '11:00 AM',
-          duration: 120,
-          attendees: [
-            { id: 'hod-eee-001', name: 'Dr. HOD-EEE', email: 'hod.eee@iaoms.edu', role: 'HOD', department: 'Electrical Engineering', status: 'accepted', isRequired: true, canEdit: false },
-            { id: 'program-head-eee-001', name: 'Dr. Program Head EEE', email: 'program.eee@iaoms.edu', role: 'Program Head', department: 'Electrical Engineering', status: 'invited', isRequired: true, canEdit: false },
-            { id: 'academic-cell-001', name: 'Prof. Academic Cell', email: 'academic@iaoms.edu', role: 'Academic Coordinator', status: 'invited', isRequired: true, canEdit: false }
-          ],
-          location: 'google-meet',
-          type: 'online',
-          status: 'scheduled',
-          priority: 'medium',
-          createdBy: 'hod-eee-001',
-          category: 'academic',
-          isRecurring: true,
-          tags: [],
-          department: 'Electrical Engineering',
-          documents: [],
-          createdAt: new Date('2024-01-14T10:00:00Z'),
-          updatedAt: new Date('2024-01-14T10:00:00Z')
-        },
-        {
-          id: '4',
-          title: 'Budget Planning Session',
-          description: 'Q2 budget allocation and planning',
-          date: '2024-01-20',
-          time: '9:00 AM',
-          duration: 180,
-          attendees: [
-            { id: 'principal-001', name: 'Dr. Principal', email: 'principal@iaoms.edu', role: 'Principal', status: 'accepted', isRequired: true, canEdit: false },
-            { id: 'registrar-001', name: 'Prof. Registrar', email: 'registrar@iaoms.edu', role: 'Registrar', status: 'accepted', isRequired: true, canEdit: false },
-            { id: 'hod-cse-001', name: 'Dr. HOD-CSE', email: 'hod.cse@iaoms.edu', role: 'HOD', department: 'Computer Science', status: 'invited', isRequired: true, canEdit: false },
-            { id: 'hod-eee-001', name: 'Dr. HOD-EEE', email: 'hod.eee@iaoms.edu', role: 'HOD', department: 'Electrical Engineering', status: 'invited', isRequired: true, canEdit: false },
-            { id: 'finance-001', name: 'Mr. Finance Head', email: 'finance@iaoms.edu', role: 'Finance Head', status: 'accepted', isRequired: true, canEdit: false }
-          ],
-          location: 'Auditorium',
-          type: 'online',
-          status: 'confirmed',
-          priority: 'high',
-          createdBy: 'registrar-001',
-          category: 'financial',
-          isRecurring: false,
-          tags: [],
-          department: 'Administration',
-          documents: [],
-          createdAt: new Date('2024-01-12T11:00:00Z'),
-          updatedAt: new Date('2024-01-17T16:45:00Z')
         }
-      ] as Meeting[];
+      ] as Meeting[] : [];
 
       try {
-        // Load meetings from localStorage with error handling
         const storedMeetings = loadMeetingsFromStorage();
         console.log(`[Calendar Widget] Loaded ${storedMeetings.length} meetings from localStorage`);
         
-        // Combine stored meetings with mock meetings
         const allMeetings = [...storedMeetings, ...mockMeetings];
-        
-        // Remove duplicates based on ID
         const uniqueMeetings = allMeetings.filter((meeting, index, self) =>
           index === self.findIndex((m) => m.id === meeting.id)
         );
         
-        // Apply recipient-based filtering
         const filteredMeetings = filterMeetingsByRecipient(uniqueMeetings, user);
         
         console.log(`[Calendar Widget] ✅ Total meetings: ${uniqueMeetings.length}, Filtered for user: ${filteredMeetings.length}`);
@@ -231,7 +187,6 @@ export const CalendarWidget: React.FC<CalendarWidgetProps> = ({
         }, 600);
       } catch (error) {
         console.error('[Calendar Widget] ❌ Error loading meetings:', error);
-        // If error, still show mock meetings
         const filteredMockMeetings = filterMeetingsByRecipient(mockMeetings, user);
         setMeetings(filteredMockMeetings);
         setLoading(false);

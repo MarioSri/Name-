@@ -35,6 +35,8 @@ import {
 } from "lucide-react";
 import { DigitalSignature } from "./DigitalSignature";
 import { useToast } from "@/hooks/use-toast";
+import { isUserInvolvedInDocument } from "@/utils/recipientMatching";
+import { useRealTimeDocuments } from "@/hooks/useRealTimeDocuments";
 import isJpg from 'is-jpg';
 
 interface DocumentTrackerProps {
@@ -225,17 +227,26 @@ export const DocumentTracker: React.FC<DocumentTrackerProps> = ({ userRole, onVi
     designation: ''
   });
   const [approvalComments, setApprovalComments] = useState<{[key: string]: any[]}>({});
+
   const { toast } = useToast();
+  const { trackDocuments, loading, error, updateRecipients } = useRealTimeDocuments();
   
 
 
-  // Load submitted documents and user profile from localStorage
+  // Use real-time documents
+  useEffect(() => {
+    setSubmittedDocuments(trackDocuments);
+  }, [trackDocuments]);
+  
+  // Load submitted documents and user profile from localStorage (fallback)
   useEffect(() => {
     const loadSubmittedDocuments = () => {
       const stored = JSON.parse(localStorage.getItem('submitted-documents') || '[]');
       console.log('📄 [Track Documents] Loading submitted documents:', stored.length, 'documents');
       console.log('📋 [Track Documents] Documents:', stored.map(doc => ({ id: doc.id, title: doc.title, submittedBy: doc.submittedBy })));
-      setSubmittedDocuments(stored);
+      if (trackDocuments.length === 0) {
+        setSubmittedDocuments(stored);
+      }
     };
     
     const handleWorkflowUpdate = () => {
@@ -483,21 +494,34 @@ export const DocumentTracker: React.FC<DocumentTrackerProps> = ({ userRole, onVi
     // Mock documents are always visible
     const isMockDocument = mockDocuments.some(mockDoc => mockDoc.id === doc.id);
     
-    // For submitted documents, only show to the submitting user
-    const isOwnDocument = doc.submittedBy === currentUserProfile.name ||
-                         doc.submittedBy === userRole ||
-                         (doc as any).submittedByDesignation === userRole ||
-                         (doc as any).submittedByDesignation === currentUserProfile.designation;
-    
-    const shouldShow = notRemoved && matchesSearch && matchesStatus && matchesType && (isMockDocument || isOwnDocument);
-    
-    if (!isMockDocument) {
-      console.log(`🔍 [Track Documents] Filtering document "${doc.title}":`, {
+    // For submitted documents, check if user is involved in the workflow
+    const isInvolvedInWorkflow = () => {
+      return isUserInvolvedInDocument({
+        user: {
+          name: currentUserProfile.name,
+          role: userRole,
+          department: currentUserProfile.department,
+          designation: currentUserProfile.designation
+        },
         submittedBy: doc.submittedBy,
-        currentUserName: currentUserProfile.name,
-        userRole: userRole,
+        submittedByRole: (doc as any).submittedByRole,
         submittedByDesignation: (doc as any).submittedByDesignation,
-        isOwnDocument: isOwnDocument,
+        recipientIds: (doc as any).recipientIds,
+        workflowSteps: doc.workflow?.steps
+      });
+    };
+    
+    const shouldShow = notRemoved && matchesSearch && matchesStatus && matchesType && (isMockDocument || isInvolvedInWorkflow());
+    
+    // Debug logging for submitted documents
+    if (!isMockDocument) {
+      console.log(`${shouldShow ? '✅' : '❌'} [Track Documents] "${doc.title}":`, {
+        submittedBy: doc.submittedBy,
+        recipientIds: (doc as any).recipientIds,
+        workflowSteps: doc.workflow?.steps?.map((s: any) => s.assignee),
+        currentUserName: currentUserProfile.name,
+        currentUserRole: userRole,
+        isInvolvedInWorkflow: isInvolvedInWorkflow(),
         shouldShow: shouldShow
       });
     }
