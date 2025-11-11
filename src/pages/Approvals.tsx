@@ -17,6 +17,7 @@ import { ExternalNotificationDispatcher } from "@/services/ExternalNotificationD
 import { isUserInRecipients, findUserStepInWorkflow } from "@/utils/recipientMatching";
 import { useRealTimeDocuments } from "@/hooks/useRealTimeDocuments";
 import isJpg from 'is-jpg';
+import { recordAction } from '@/lib/auditLogger';
 
 const Approvals = () => {
   const { user, logout } = useAuth();
@@ -761,7 +762,7 @@ const Approvals = () => {
     }
   };
   
-  const handleAcceptDocumentFallback = (docId: string) => {
+  const handleAcceptDocumentFallback = async (docId: string) => {
     // Find the document in pending approvals
     const doc = realTimePendingApprovals.find(d => d.id === docId) || 
                 pendingApprovals.find(d => d.id === docId) || 
@@ -1079,6 +1080,21 @@ const Approvals = () => {
         }
       }));
       
+      // Record action to Sigstore Rekor + Supabase
+      try {
+        await recordAction({
+          documentId: docId,
+          recipientId: user?.id || 'unknown',
+          recipientName: currentUserName,
+          recipientRole: user?.role || 'Unknown',
+          actionType: 'approve',
+          signatureData: { comment: comments[docId]?.join(' ') }
+        });
+        console.log('✅ Audit log recorded for approval');
+      } catch (error) {
+        console.error('❌ Failed to record audit log:', error);
+      }
+      
       toast({
         title: "Document Signed & Approved",
         description: `${doc.title} has been signed and forwarded to the next recipient.`,
@@ -1112,7 +1128,7 @@ const Approvals = () => {
     }
   };
   
-  const handleRejectDocumentFallback = (docId: string) => {
+  const handleRejectDocumentFallback = async (docId: string) => {
     const userComments = comments[docId];
     
     // Find the document in pending approvals
@@ -1466,6 +1482,21 @@ const Approvals = () => {
           rejectedDate: currentDate
         }
       }));
+      
+      // Record action to Sigstore Rekor + Supabase
+      try {
+        await recordAction({
+          documentId: docId,
+          recipientId: user?.id || 'unknown',
+          recipientName: currentUserName,
+          recipientRole: user?.role || 'Unknown',
+          actionType: 'reject',
+          signatureData: { reason: userComments.join(' ') }
+        });
+        console.log('✅ Audit log recorded for rejection');
+      } catch (error) {
+        console.error('❌ Failed to record audit log:', error);
+      }
       
       const rejectionMessage = (isApprovalChainBypass && routingType)
         ? `Rejection bypassed. Workflow continues in ${routingType} mode. Next recipient will receive the card.`
