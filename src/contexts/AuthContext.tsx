@@ -39,13 +39,63 @@ interface AuthProviderProps {
   children: ReactNode;
 }
 
+const getUserPermissions = (role: string) => {
+  const permissions = {
+    principal: {
+      canApprove: true,
+      canViewAllDepartments: true,
+      canManageWorkflows: true,
+      canViewAnalytics: true,
+      canManageUsers: true,
+    },
+    registrar: {
+      canApprove: true,
+      canViewAllDepartments: true,
+      canManageWorkflows: true,
+      canViewAnalytics: true,
+      canManageUsers: false,
+    },
+    hod: {
+      canApprove: true,
+      canViewAllDepartments: false,
+      canManageWorkflows: true,
+      canViewAnalytics: true,
+      canManageUsers: false,
+    },
+    'program-head': {
+      canApprove: true,
+      canViewAllDepartments: false,
+      canManageWorkflows: true,
+      canViewAnalytics: true,
+      canManageUsers: false,
+    },
+    employee: {
+      canApprove: true,
+      canViewAllDepartments: false,
+      canManageWorkflows: true,
+      canViewAnalytics: true,
+      canManageUsers: false,
+    },
+  };
+
+  return permissions[role as keyof typeof permissions] || permissions.employee;
+};
+
 export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   // Initialize user from sessionStorage immediately to avoid loading state
   const [user, setUser] = useState<User | null>(() => {
     const savedUser = sessionStorage.getItem('iaoms-user');
     if (savedUser) {
       try {
-        return JSON.parse(savedUser);
+        const parsedUser = JSON.parse(savedUser);
+        // Update permissions to ensure they match current configuration
+        const updatedUser = {
+          ...parsedUser,
+          permissions: getUserPermissions(parsedUser.role)
+        };
+        // Save updated user back to sessionStorage
+        sessionStorage.setItem('iaoms-user', JSON.stringify(updatedUser));
+        return updatedUser;
       } catch (error) {
         console.error('Failed to parse saved user:', error);
         sessionStorage.removeItem('iaoms-user');
@@ -58,47 +108,6 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
 
   const isAuthenticated = !!user;
 
-  const getUserPermissions = (role: string) => {
-    const permissions = {
-      principal: {
-        canApprove: true,
-        canViewAllDepartments: true,
-        canManageWorkflows: true,
-        canViewAnalytics: true,
-        canManageUsers: true,
-      },
-      registrar: {
-        canApprove: true,
-        canViewAllDepartments: true,
-        canManageWorkflows: true,
-        canViewAnalytics: true,
-        canManageUsers: false,
-      },
-      hod: {
-        canApprove: true,
-        canViewAllDepartments: false,
-        canManageWorkflows: true,
-        canViewAnalytics: true,
-        canManageUsers: false,
-      },
-      'program-head': {
-        canApprove: true,
-        canViewAllDepartments: false,
-        canManageWorkflows: true,
-        canViewAnalytics: true,
-        canManageUsers: false,
-      },
-      employee: {
-        canApprove: false,
-        canViewAllDepartments: false,
-        canManageWorkflows: true,
-        canViewAnalytics: true,
-        canManageUsers: false,
-      },
-    };
-
-    return permissions[role as keyof typeof permissions] || permissions.employee;
-  };
 
   const login = async (role: string): Promise<void> => {
     setIsLoading(true);

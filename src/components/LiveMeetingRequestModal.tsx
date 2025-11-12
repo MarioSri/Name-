@@ -253,6 +253,30 @@ export const LiveMeetingRequestModal: React.FC<LiveMeetingRequestModalProps> = (
         storageArea: localStorage
       }));
 
+      // Send notifications to selected recipients
+      const { notificationService } = await import('../services/NotificationService');
+      selectedParticipantNames.forEach((participantName) => {
+        notificationService.addNotification({
+          title: "New LiveMeet+ Request",
+          message: `${user?.name} has requested a ${meetingFormat} meeting for "${documentTitle}". ${agenda ? `Agenda: ${agenda}` : ''}`,
+          type: "meeting",
+          urgent: urgency === 'immediate' || urgency === 'urgent',
+          documentId: documentId
+        });
+      });
+
+      // Dispatch custom event for notification widget updates
+      window.dispatchEvent(new CustomEvent('livemeet-notification', {
+        detail: {
+          recipients: selectedParticipantNames,
+          requester: user?.name,
+          documentTitle,
+          meetingFormat,
+          urgency,
+          agenda
+        }
+      }));
+
       console.log(`[LiveMeet+] Request created by ${user?.name} for: ${selectedParticipantNames.join(', ')}`);
 
       // Show success toast with participant names

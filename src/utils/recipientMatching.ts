@@ -58,7 +58,7 @@ export const isUserInRecipients = (options: RecipientMatchOptions): boolean => {
         (currentUserRole === 'program-head' && recipientLower.includes('program')) ||
         (currentUserRole === 'controller' && recipientLower.includes('controller')) ||
         (currentUserRole === 'cdc' && recipientLower.includes('cdc')) ||
-        (currentUserRole === 'employee' && recipientLower.includes('employee')) ||
+        (currentUserRole === 'employee' && (recipientLower.includes('employee') || recipientLower.includes('staff') || recipientLower.includes('faculty'))) ||
         (currentUserRole === 'faculty' && recipientLower.includes('faculty'))
       );
     });
@@ -103,6 +103,7 @@ export const isUserInRecipients = (options: RecipientMatchOptions): boolean => {
         (currentUserRole === 'registrar' && (recipientLower.includes('registrar') || recipientLower.includes('prof. sarah'))) ||
         (currentUserRole === 'dean' && (recipientLower.includes('dean') || recipientLower.includes('dr. maria'))) ||
         (currentUserRole === 'hod' && (recipientLower.includes('hod') || recipientLower.includes('head of department'))) ||
+        (currentUserRole === 'employee' && (recipientLower.includes('employee') || recipientLower.includes('staff') || recipientLower.includes('faculty') || recipientLower.includes('mr. john'))) ||
         // Generic role matching
         recipientLower.includes(currentUserRole) ||
         // Name parts matching

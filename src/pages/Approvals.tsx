@@ -1512,8 +1512,8 @@ const Approvals = () => {
     }
   };
   
-  // Only show static mock cards for Principal role
-  const staticPendingDocs = user.role === 'principal' ? [
+  // Show static mock cards for Principal and Employee roles
+  const staticPendingDocs = (user.role === 'principal' || user.role === 'employee') ? [
     {
       id: 'faculty-meeting',
       title: 'Faculty Meeting Minutes – Q4 2024',
@@ -1521,7 +1521,9 @@ const Approvals = () => {
       submitter: 'Dr. Sarah Johnson',
       submittedDate: '2024-01-15',
       priority: 'high',
-      description: 'Add a risk-mitigation section to highlight potential delays or issues.'
+      description: 'Add a risk-mitigation section to highlight potential delays or issues.',
+      recipients: ['Employee', 'Principal', 'HOD', 'Registrar'], // Ensure employees can see this
+      recipientIds: ['employee', 'principal', 'hod', 'registrar']
     },
     {
       id: 'budget-request',
@@ -1530,7 +1532,9 @@ const Approvals = () => {
       submitter: 'Prof. David Brown',
       submittedDate: '2024-01-13',
       priority: 'medium',
-      description: 'Consider revising the scope to focus on priority items within this quarter\'s budget.'
+      description: 'Consider revising the scope to focus on priority items within this quarter\'s budget.',
+      recipients: ['Employee', 'Principal', 'HOD'], // Ensure employees can see this
+      recipientIds: ['employee', 'principal', 'hod']
     },
     {
       id: 'student-event',
@@ -1539,7 +1543,9 @@ const Approvals = () => {
       submitter: 'Dr. Emily Davis',
       submittedDate: '2024-01-14',
       priority: 'medium',
-      description: 'Annual technology festival proposal including budget allocation, venue requirements, and guest speaker arrangements.'
+      description: 'Annual technology festival proposal including budget allocation, venue requirements, and guest speaker arrangements.',
+      recipients: ['Employee', 'Principal', 'Registrar'], // Ensure employees can see this
+      recipientIds: ['employee', 'principal', 'registrar']
     },
     {
       id: 'research-methodology',
@@ -1548,7 +1554,9 @@ const Approvals = () => {
       submitter: 'Prof. Jessica Chen',
       submittedDate: '2024-01-20',
       priority: 'normal',
-      description: 'Comprehensive guidelines for research methodology standards and academic review processes.'
+      description: 'Comprehensive guidelines for research methodology standards and academic review processes.',
+      recipients: ['Employee', 'Principal', 'HOD', 'Registrar'], // Ensure employees can see this
+      recipientIds: ['employee', 'principal', 'hod', 'registrar']
     }
   ] : [];
   
@@ -1631,12 +1639,14 @@ const Approvals = () => {
         const recipientLower = recipientId.toLowerCase();
         const userRoleLower = currentUserRole.toLowerCase();
         
-        // Simple matching for all roles
+        // Enhanced matching for all roles including employee
         const isMatch = recipientLower.includes(userRoleLower) ||
                        recipientLower.includes('principal') && userRoleLower === 'principal' ||
                        recipientLower.includes('registrar') && userRoleLower === 'registrar' ||
                        recipientLower.includes('hod') && userRoleLower === 'hod' ||
-                       recipientLower.includes('program head') && userRoleLower === 'dean';
+                       recipientLower.includes('employee') && userRoleLower === 'employee' ||
+                       recipientLower.includes('program head') && userRoleLower === 'program-head' ||
+                       recipientLower.includes('dean') && userRoleLower === 'dean';
         
         console.log(`  "${recipientId}" -> ${isMatch ? 'MATCH' : 'NO MATCH'}`);
         return isMatch;
@@ -1657,18 +1667,21 @@ const Approvals = () => {
         const userNameLower = currentUserName.toLowerCase();
         const userRoleLower = currentUserRole.toLowerCase();
         
-        // Simple matching for names and roles
+        // Enhanced matching for names and roles including employee
         const isMatch = recipient.includes(currentUserName) ||
                        userNameLower && recipientLower.includes(userNameLower) ||
                        recipientLower.includes(userRoleLower) ||
                        recipientLower.includes('principal') && userRoleLower === 'principal' ||
                        recipientLower.includes('registrar') && userRoleLower === 'registrar' ||
                        recipientLower.includes('hod') && userRoleLower === 'hod' ||
+                       recipientLower.includes('employee') && userRoleLower === 'employee' ||
+                       recipientLower.includes('program head') && userRoleLower === 'program-head' ||
                        recipientLower.includes('dean') && userRoleLower === 'dean';
         
         console.log(`  "${recipient}" -> ${isMatch ? 'MATCH' : 'NO MATCH'}`);
         return isMatch;
       });
+      
       
       if (matchesDisplayName) {
         console.log('✅ Matches display names');
@@ -1948,8 +1961,8 @@ const Approvals = () => {
     setDocumensoDocument(null);
   };
 
-  // Only show static approval history for Principal role
-  const recentApprovals = user.role === 'principal' ? [
+  // Show static approval history for Principal and Employee roles  
+  const recentApprovals = (user.role === 'principal' || user.role === 'employee') ? [
     {
       id: 10,
       title: "Academic Standards Review Report",

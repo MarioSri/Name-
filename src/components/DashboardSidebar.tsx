@@ -125,6 +125,7 @@ export function DashboardSidebar({ userRole }: DashboardSidebarProps) {
     const employeeRoleItems = [
       { title: "Dashboard", url: "/dashboard", icon: LayoutDashboard },
       { title: "Track Documents", url: "/track-documents", icon: Eye },
+      { title: "Approval Center", url: "/approvals", icon: CheckSquare },
       { title: "Calendar", url: "/calendar", icon: Calendar },
       { title: "Messages", url: "/messages", icon: MessageSquare },
       { title: "Document Management", url: "/documents", icon: FileText },

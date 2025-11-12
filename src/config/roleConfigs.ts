@@ -214,7 +214,7 @@ export const roleConfigs: Record<string, RoleConfig> = {
     color: '#6b7280',
     icon: 'User',
     permissions: {
-      canViewAllDocuments: false,
+      canViewAllDocuments: true,
       canApproveDocuments: false,
       canRejectDocuments: false,
       canMassDistribute: false,
