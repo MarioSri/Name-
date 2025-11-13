@@ -51,6 +51,7 @@ export const useRealTimeDocuments = (): UseRealTimeDocumentsReturn => {
         
         return isUserInRecipients({
           user: {
+            id: user.id,
             name: user.name,
             role: user.role,
             department: user.department,
@@ -116,6 +117,8 @@ export const useRealTimeDocuments = (): UseRealTimeDocumentsReturn => {
     window.addEventListener('emergency-document-created', handleEmergencyDocument as EventListener);
     window.addEventListener('approval-chain-created', handleApprovalChainCreated as EventListener);
     window.addEventListener('recipients-updated', handleRecipientsUpdated as EventListener);
+    window.addEventListener('document-approval-created', () => loadData() as any);
+    window.addEventListener('approval-card-created', () => loadData() as any);
     window.addEventListener('storage', handleStorageChange);
 
     // Real-time service events
@@ -130,6 +133,8 @@ export const useRealTimeDocuments = (): UseRealTimeDocumentsReturn => {
       window.removeEventListener('emergency-document-created', handleEmergencyDocument as EventListener);
       window.removeEventListener('approval-chain-created', handleApprovalChainCreated as EventListener);
       window.removeEventListener('recipients-updated', handleRecipientsUpdated as EventListener);
+      window.removeEventListener('document-approval-created', () => loadData() as any);
+      window.removeEventListener('approval-card-created', () => loadData() as any);
       window.removeEventListener('storage', handleStorageChange);
     };
   }, [loadData]);

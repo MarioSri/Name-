@@ -3,6 +3,7 @@
  */
 
 export interface User {
+  id?: string;
   name?: string;
   role?: string;
   department?: string;
@@ -37,6 +38,12 @@ export const isUserInRecipients = (options: RecipientMatchOptions): boolean => {
   
   // Check recipient IDs first (most reliable)
   if (recipientIds && recipientIds.length > 0) {
+    // First check for exact user.id match (most reliable)
+    if (user.id && recipientIds.some((recipientId: string) => recipientId === user.id)) {
+      return true;
+    }
+    
+    // Then check fuzzy matching for backward compatibility
     const matchesRecipientId = recipientIds.some((recipientId: string) => {
       const recipientLower = recipientId.toLowerCase();
       

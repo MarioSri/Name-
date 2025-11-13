@@ -75,7 +75,18 @@ const Approvals = () => {
         console.log('👤 [Approvals] Current user:', user?.name, '| Role:', user?.role);
         
         // Check if user should see this card
-        const shouldShow = isUserInRecipients(approval);
+        const shouldShow = isUserInRecipients({
+          user: {
+            id: user?.id,
+            name: user?.name,
+            role: user?.role,
+            department: user?.department,
+            branch: user?.branch
+          },
+          recipients: approval?.recipients,
+          recipientIds: approval?.recipientIds,
+          workflowSteps: approval?.workflow?.steps
+        });
         console.log(`🔍 [Approvals] Should show card "${approval.title}" to current user: ${shouldShow}`);
         
         // Add to state if not duplicate and user should see it
