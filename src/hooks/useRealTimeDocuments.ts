@@ -40,11 +40,26 @@ export const useRealTimeDocuments = (): UseRealTimeDocumentsReturn => {
   // Load initial data
   const loadData = useCallback(() => {
     try {
-      // Load track documents
+      // Load track documents (filtered for current user as submitter only)
       const storedTrackDocs = JSON.parse(localStorage.getItem('submitted-documents') || '[]');
-      setTrackDocuments(storedTrackDocs);
+      const filteredTrackDocs = storedTrackDocs.filter((doc: DocumentData) => {
+        if (!user) return false;
+        
+        // Only show documents where current user is the submitter
+        const isSubmitter = (
+          doc.submitter === user.name ||
+          doc.submitter === user.role ||
+          (doc as any).submittedBy === user.name ||
+          (doc as any).submittedByRole === user.role ||
+          (doc as any).submittedByDesignation === user.role
+        );
+        
+        return isSubmitter;
+      });
+      
+      setTrackDocuments(filteredTrackDocs);
 
-      // Load approval cards (filtered for current user)
+      // Load approval cards (filtered for current user as recipient)
       const storedApprovalCards = JSON.parse(localStorage.getItem('pending-approvals') || '[]');
       const filteredCards = storedApprovalCards.filter((card: DocumentData) => {
         if (!user) return false;

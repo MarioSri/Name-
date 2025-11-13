@@ -598,9 +598,11 @@ export const EmergencyWorkflowInterface: React.FC<EmergencyWorkflowInterfaceProp
       id: docId,
       title: emergencyData.title,
       type: 'Emergency',
-      submittedBy: currentUserName,
+      submitter: currentUserName,  // ✅ Use 'submitter' field for consistency
+      submittedBy: currentUserName,  // Keep for backward compatibility
       submittedByDepartment: user?.department || 'Emergency Management',
-      submittedByDesignation: userRole,
+      submittedByRole: userRole,  // ✅ Use consistent field name
+      submittedByDesignation: userRole,  // Keep for backward compatibility
       submittedDate: currentDate,
       status: 'pending' as const,
       priority: emergencyData.urgencyLevel,

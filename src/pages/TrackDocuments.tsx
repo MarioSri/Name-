@@ -49,7 +49,8 @@ const TrackDocuments = () => {
 
         <div className="space-y-6">
           <DocumentTracker 
-            userRole={user.role} 
+            userRole={user.role}
+            userName={user.name}
             onViewFile={handleViewFile}
             onViewFiles={handleViewFiles}
           />

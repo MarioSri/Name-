@@ -41,6 +41,7 @@ import isJpg from 'is-jpg';
 
 interface DocumentTrackerProps {
   userRole: string;
+  userName?: string;
   onViewFile?: (file: File) => void;
   onViewFiles?: (files: File[]) => void; // Support for multiple files
 }
@@ -211,7 +212,7 @@ const mockDocuments: Document[] = [
   }
 ];
 
-export const DocumentTracker: React.FC<DocumentTrackerProps> = ({ userRole, onViewFile, onViewFiles }) => {
+export const DocumentTracker: React.FC<DocumentTrackerProps> = ({ userRole, userName, onViewFile, onViewFiles }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [typeFilter, setTypeFilter] = useState<string>('all');
@@ -298,13 +299,20 @@ export const DocumentTracker: React.FC<DocumentTrackerProps> = ({ userRole, onVi
         try {
           const parsedProfile = JSON.parse(savedProfile);
           setCurrentUserProfile({
-            name: parsedProfile.name || 'Current User',
+            name: userName || parsedProfile.name || 'Current User',
             department: parsedProfile.department || '',
             designation: parsedProfile.designation || ''
           });
         } catch (error) {
           console.error('Error loading user profile:', error);
         }
+      } else if (userName) {
+        // Use userName from props if no saved profile
+        setCurrentUserProfile({
+          name: userName,
+          department: '',
+          designation: ''
+        });
       }
     };
     
@@ -494,34 +502,31 @@ export const DocumentTracker: React.FC<DocumentTrackerProps> = ({ userRole, onVi
     // Mock documents are always visible
     const isMockDocument = mockDocuments.some(mockDoc => mockDoc.id === doc.id);
     
-    // For submitted documents, check if user is involved in the workflow
-    const isInvolvedInWorkflow = () => {
-      return isUserInvolvedInDocument({
-        user: {
-          name: currentUserProfile.name,
-          role: userRole,
-          department: currentUserProfile.department,
-          designation: currentUserProfile.designation
-        },
-        submittedBy: doc.submittedBy,
-        submittedByRole: (doc as any).submittedByRole,
-        submittedByDesignation: (doc as any).submittedByDesignation,
-        recipientIds: (doc as any).recipientIds,
-        workflowSteps: doc.workflow?.steps || []
-      });
+    // For submitted documents, only show to submitter (not recipients)
+    const isSubmitter = () => {
+      const submittedBy = doc.submittedBy || (doc as any).submitter;
+      const submittedByRole = (doc as any).submittedByRole;
+      const submittedByDesignation = (doc as any).submittedByDesignation;
+      
+      return (
+        submittedBy === currentUserProfile.name ||
+        submittedBy === userRole ||
+        submittedByRole === userRole ||
+        submittedByDesignation === userRole ||
+        submittedByDesignation === currentUserProfile.designation
+      );
     };
     
-    const shouldShow = notRemoved && matchesSearch && matchesStatus && matchesType && (isMockDocument || isInvolvedInWorkflow());
+    const shouldShow = notRemoved && matchesSearch && matchesStatus && matchesType && (isMockDocument || isSubmitter());
     
     // Debug logging for submitted documents
     if (!isMockDocument) {
       console.log(`${shouldShow ? '✅' : '❌'} [Track Documents] "${doc.title}":`, {
         submittedBy: doc.submittedBy,
-        recipientIds: (doc as any).recipientIds,
-        workflowSteps: doc.workflow?.steps?.map((s: any) => s.assignee),
+        submittedByRole: (doc as any).submittedByRole,
         currentUserName: currentUserProfile.name,
         currentUserRole: userRole,
-        isInvolvedInWorkflow: isInvolvedInWorkflow(),
+        isSubmitter: isSubmitter(),
         shouldShow: shouldShow
       });
     }

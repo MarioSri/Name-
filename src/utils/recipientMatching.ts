@@ -24,39 +24,54 @@ export interface RecipientMatchOptions {
 export const isUserInRecipients = (options: RecipientMatchOptions): boolean => {
   const { user, recipients, recipientIds, workflowSteps } = options;
   
-  if (!user) return false;
+  if (!user) {
+    console.log('❌ [Recipient Matching] No user provided');
+    return false;
+  }
   
   const currentUserName = user.name?.toLowerCase() || '';
   const currentUserRole = user.role?.toLowerCase() || '';
+  
+  console.log('🔍 [Recipient Matching] Checking user:', {
+    name: user.name,
+    role: user.role,
+    recipientIds: recipientIds,
+    recipients: recipients
+  });
   
   // If no recipients specified, show to everyone (backward compatibility)
   if ((!recipients || recipients.length === 0) && 
       (!recipientIds || recipientIds.length === 0) && 
       (!workflowSteps || workflowSteps.length === 0)) {
+    console.log('✅ [Recipient Matching] No recipients specified - showing to all');
     return true;
   }
   
   // Check recipient IDs first (most reliable)
   if (recipientIds && recipientIds.length > 0) {
-    // First check for exact user.id match (most reliable)
-    if (user.id && recipientIds.some((recipientId: string) => recipientId === user.id)) {
-      return true;
-    }
+    // NOTE: user.id is timestamp-based (user-123456789), not role-based
+    // recipientIds are role-based ('principal-dr.-robert-principal'), so we match by role/name
     
-    // Then check fuzzy matching for backward compatibility
     const matchesRecipientId = recipientIds.some((recipientId: string) => {
       const recipientLower = recipientId.toLowerCase();
+      
+      // Extract name parts from user for better matching
+      const nameParts = currentUserName.toLowerCase().split(' ');
+      const hasNameMatch = nameParts.some(part => 
+        part.length > 2 && recipientLower.includes(part)
+      );
       
       return (
         // Direct role matching
         recipientLower.includes(currentUserRole) ||
         // Name matching with various formats
-        (currentUserName.length > 2 && recipientLower.includes(currentUserName.replace(/\s+/g, '-'))) ||
-        (currentUserName.length > 2 && recipientLower.includes(currentUserName.replace(/\s+/g, ''))) ||
+        (currentUserName.length > 2 && recipientLower.includes(currentUserName.replace(/\s+/g, '-').toLowerCase())) ||
+        (currentUserName.length > 2 && recipientLower.includes(currentUserName.replace(/\s+/g, '').toLowerCase())) ||
+        hasNameMatch ||
         // Department/Branch matching
         (user.department && recipientLower.includes(user.department.toLowerCase())) ||
         (user.branch && recipientLower.includes(user.branch.toLowerCase())) ||
-        // Role variations
+        // Role variations (specific role matching)
         (currentUserRole === 'principal' && recipientLower.includes('principal')) ||
         (currentUserRole === 'registrar' && recipientLower.includes('registrar')) ||
         (currentUserRole === 'dean' && recipientLower.includes('dean')) ||
@@ -70,7 +85,10 @@ export const isUserInRecipients = (options: RecipientMatchOptions): boolean => {
       );
     });
     
-    if (matchesRecipientId) return true;
+    if (matchesRecipientId) {
+      console.log('✅ [Recipient Matching] Matched via recipientIds');
+      return true;
+    }
   }
   
   // Check workflow steps
@@ -94,7 +112,10 @@ export const isUserInRecipients = (options: RecipientMatchOptions): boolean => {
       );
     });
     
-    if (matchesWorkflowStep) return true;
+    if (matchesWorkflowStep) {
+      console.log('✅ [Recipient Matching] Matched via workflow steps');
+      return true;
+    }
   }
   
   // Check display names (legacy support)
@@ -120,9 +141,13 @@ export const isUserInRecipients = (options: RecipientMatchOptions): boolean => {
       );
     });
     
-    if (matchesDisplayName) return true;
+    if (matchesDisplayName) {
+      console.log('✅ [Recipient Matching] Matched via display names');
+      return true;
+    }
   }
   
+  console.log('❌ [Recipient Matching] No match found');
   return false;
 };
 

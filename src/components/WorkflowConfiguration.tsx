@@ -436,9 +436,11 @@ export const WorkflowConfiguration: React.FC<WorkflowConfigurationProps> = ({ cl
         id: `DOC-${Date.now()}`,
         title: documentTitle,
         type: documentTypes[0]?.charAt(0).toUpperCase() + documentTypes[0]?.slice(1) || 'Document',
+        submitter: currentUserName,  // ✅ Use 'submitter' field for consistency
         submittedBy: currentUserName,
         submittedByDepartment: currentUserDept,
         submittedByDesignation: currentUserDesignation,
+        submittedByRole: currentUserRole,  // ✅ Add role for matching
         submittedDate: new Date().toISOString().split('T')[0],
         status: selectedRecipients.length > 0 ? 'pending' : 'approved', // Pending if has recipients, approved if bypass only
         priority: documentPriority === 'normal' ? 'Normal Priority' : 

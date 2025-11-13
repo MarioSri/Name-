@@ -3446,7 +3446,9 @@ const Approvals = () => {
           </TabsContent>
           
           <TabsContent value="signature" className="space-y-6">
-            <AdvancedDigitalSignature userRole={user.role} />
+            <div className="pointer-events-none opacity-50 select-none">
+              <AdvancedDigitalSignature userRole={user.role} />
+            </div>
           </TabsContent>
           
           <TabsContent value="history" className="space-y-6">

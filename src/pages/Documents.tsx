@@ -174,6 +174,7 @@ const Documents = () => {
       id: `DOC-${Date.now()}`,
       title: data.title,
       type: data.documentTypes[0]?.charAt(0).toUpperCase() + data.documentTypes[0]?.slice(1) || 'Document',
+      submitter: currentUserName,  // ✅ Use 'submitter' field for consistency
       submittedBy: currentUserName,
       submittedByDepartment: currentUserDept,
       submittedByDesignation: currentUserDesignation,
