@@ -121,6 +121,12 @@ class SupabaseWorkflowService {
     if (error && error.code !== 'PGRST116') throw error;
     return data;
   }
+
+  async updateRecipient(userId: string, updates: any) {
+    const { data, error } = await supabase.from('recipients').update(updates).eq('user_id', userId).select().single();
+    if (error) throw error;
+    return data;
+  }
 }
 
 export const supabaseWorkflowService = new SupabaseWorkflowService();

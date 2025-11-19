@@ -813,19 +813,19 @@ export const DocumentTracker: React.FC<DocumentTrackerProps> = ({ userRole, user
                       <div className="flex items-center gap-4 mt-2 text-sm text-muted-foreground">
                         <div className="flex items-center gap-1">
                           <FileText className="h-4 w-4" />
-                          {document.type}
+                          {String(document.type || '')}
                         </div>
                         <div className="flex items-center gap-1">
                           <User className="h-4 w-4" />
-                          <span>{document.submittedBy}</span>
+                          <span>{String(document.submittedBy || '')}</span>
                           {(document as any).submittedByDesignation && (
-                            <span className="text-xs text-muted-foreground"> • {(document as any).submittedByDesignation.toUpperCase()}</span>
+                            <span className="text-xs text-muted-foreground"> • {String((document as any).submittedByDesignation).toUpperCase()}</span>
                           )}
                         </div>
 
                         <div className="flex items-center gap-1">
                           <Calendar className="h-4 w-4" />
-                          {document.submittedDate}
+                          {String(document.submittedDate || '')}
                         </div>
                       </div>
                     </div>
@@ -847,11 +847,11 @@ export const DocumentTracker: React.FC<DocumentTrackerProps> = ({ userRole, user
                   <div className="space-y-2">
                     <div className="flex justify-between text-sm">
                       <span>Workflow Progress</span>
-                      <span>{document.workflow?.progress ?? 0}%</span>
+                      <span>{String(document.workflow?.progress ?? 0)}%</span>
                     </div>
                     <Progress value={document.workflow?.progress ?? 0} className="h-2" />
                     <p className="text-sm text-muted-foreground">
-                      Current Step: {document.workflow?.currentStep ?? 'N/A'}
+                      Current Step: {String(document.workflow?.currentStep ?? 'N/A')}
                     </p>
                   </div>
 
@@ -876,10 +876,10 @@ export const DocumentTracker: React.FC<DocumentTrackerProps> = ({ userRole, user
                         {step.status === 'pending' && <div className="h-4 w-4 rounded-full border border-gray-300" />}
                         <div className="flex-1">
                           <div className={`${step.status === 'current' ? 'font-semibold' : ''}`}>
-                            {step.name}
+                            {String(step.name || '')}
                           </div>
                           <div className="flex items-center gap-2">
-                            <div className="text-xs text-muted-foreground">{step.assignee}</div>
+                            <div className="text-xs text-muted-foreground">{String(step.assignee || '')}</div>
                             {/* Dynamic escalation badges */}
                             {(step as any).escalated && (step as any).escalationLevel && (
                               <Badge variant="outline" className="text-xs bg-orange-100 border-orange-300 text-orange-700">
@@ -931,10 +931,6 @@ export const DocumentTracker: React.FC<DocumentTrackerProps> = ({ userRole, user
                       <Signature className="h-4 w-4" />
                       {(() => {
                         const currentSignedCount = document.signedBy?.length || 0;
-                        const totalRecipients = (document as any).totalRecipients || 
-                          (document.workflow?.steps || []).filter(step => 
-                            step.name !== 'Submission' && step.assignee !== document.submittedBy
-                          ).length;
                         
                         if (currentSignedCount > 0) {
                           return (
@@ -951,9 +947,9 @@ export const DocumentTracker: React.FC<DocumentTrackerProps> = ({ userRole, user
                         } else {
                           return (
                             <>
-                              <span>Signed by Recipients</span>
+                              <span>Pending Signatures</span>
                               <Badge variant="outline" className="bg-gray-50 text-gray-700 border-gray-300">
-                                Signatures
+                                0 Signatures
                               </Badge>
                             </>
                           );

@@ -49,11 +49,14 @@ export const isUserInRecipients = (options: RecipientMatchOptions): boolean => {
   
   // Check recipient IDs first (most reliable)
   if (recipientIds && recipientIds.length > 0) {
-    // NOTE: user.id is timestamp-based (user-123456789), not role-based
-    // recipientIds are role-based ('principal-dr.-robert-principal'), so we match by role/name
-    
     const matchesRecipientId = recipientIds.some((recipientId: string) => {
       const recipientLower = recipientId.toLowerCase();
+      
+      // ✅ Check UUID match first (for Supabase recipients)
+      if (user.id && recipientId === user.id) {
+        console.log('✅ [Recipient Matching] UUID match:', recipientId);
+        return true;
+      }
       
       // Extract name parts from user for better matching
       const nameParts = currentUserName.toLowerCase().split(' ');

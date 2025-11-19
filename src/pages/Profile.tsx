@@ -61,61 +61,34 @@ const Profile = () => {
       
       setLoading(true);
       try {
-        // Try to get recipient data from Supabase
+        // Get recipient data from Supabase by user_id or email
         const recipient = await supabaseWorkflowService.getRecipientById(user.id || user.email);
         
         if (recipient) {
-          // Map recipient data to profile data
+          // Map Supabase recipient data to profile
           setProfileData({
-            name: recipient.name || user.name || "",
-            email: recipient.email || user.email || "",
+            name: recipient.name || "",
+            email: recipient.email || "",
             phone: recipient.phone || "",
-            department: recipient.department || user.department || "",
+            department: recipient.department || "",
             employeeId: recipient.user_id || "",
-            designation: recipient.role || user.role || "",
-            bio: "",
-            avatar: ""
+            designation: recipient.role_title || recipient.role || "",
+            bio: recipient.bio || "",
+            avatar: recipient.avatar || ""
           });
         } else {
-          // Fallback to user context data
-          setProfileData({
-            name: user.name || "",
-            email: user.email || "",
-            phone: "",
-            department: user.department || "",
-            employeeId: user.id || "",
-            designation: user.role || "",
-            bio: "",
-            avatar: ""
+          toast({
+            title: "Profile Not Found",
+            description: "No profile data found in database. Please contact administrator.",
+            variant: "destructive"
           });
-        }
-        
-        // Check localStorage for additional data (avatar, bio)
-        const savedProfile = localStorage.getItem('user-profile');
-        if (savedProfile) {
-          try {
-            const parsedProfile = JSON.parse(savedProfile);
-            setProfileData(prev => ({
-              ...prev,
-              avatar: parsedProfile.avatar || prev.avatar,
-              bio: parsedProfile.bio || prev.bio
-            }));
-          } catch (error) {
-            console.error('Error loading saved profile:', error);
-          }
         }
       } catch (error) {
         console.error('Error loading recipient data:', error);
-        // Fallback to user context data on error
-        setProfileData({
-          name: user.name || "",
-          email: user.email || "",
-          phone: "",
-          department: user.department || "",
-          employeeId: user.id || "",
-          designation: user.role || "",
-          bio: "",
-          avatar: ""
+        toast({
+          title: "Error Loading Profile",
+          description: "Failed to load profile data from database.",
+          variant: "destructive"
         });
       } finally {
         setLoading(false);
@@ -164,14 +137,33 @@ const Profile = () => {
     navigate("/");
   };
 
-  const handleSaveProfile = (data: PersonalInfoData) => {
-    setProfileData(data);
-    localStorage.setItem('user-profile', JSON.stringify(data));
-    setIsEditing(false);
-    toast({
-      title: "Profile Updated",
-      description: "Your profile information has been saved successfully.",
-    });
+  const handleSaveProfile = async (data: PersonalInfoData) => {
+    try {
+      // Update Supabase recipients table
+      await supabaseWorkflowService.updateRecipient(user?.id || user?.email || '', {
+        name: data.name,
+        email: data.email,
+        phone: data.phone,
+        department: data.department,
+        role_title: data.designation,
+        bio: data.bio,
+        avatar: data.avatar
+      });
+      
+      setProfileData(data);
+      setIsEditing(false);
+      toast({
+        title: "Profile Updated",
+        description: "Your profile has been saved to database successfully.",
+      });
+    } catch (error) {
+      console.error('Error saving profile:', error);
+      toast({
+        title: "Error Saving Profile",
+        description: "Failed to save profile to database.",
+        variant: "destructive"
+      });
+    }
   };
 
   const handlePreferenceChange = (key: string, value: boolean | string) => {

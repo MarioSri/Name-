@@ -6,7 +6,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { useResponsive } from '@/hooks/useResponsive';
 import { getDashboardConfig } from '@/config/roleConfigs';
 import { cn } from '@/lib/utils';
-import { PersonalInfoData } from '@/components/PersonalInformationForm';
+import { supabaseWorkflowService } from '@/services/SupabaseWorkflowService';
 import {
   Crown,
   Shield,
@@ -17,23 +17,40 @@ import {
   Zap
 } from 'lucide-react';
 
+interface ProfileData {
+  name?: string;
+  department?: string;
+  designation?: string;
+  employeeId?: string;
+}
+
 export const RoleDashboard: React.FC = () => {
   const { user } = useAuth();
   const { isMobile } = useResponsive();
-  const [personalInfo, setPersonalInfo] = useState<PersonalInfoData | null>(null);
+  const [profileData, setProfileData] = useState<ProfileData | null>(null);
 
-  // Load saved personal information
+  // Load profile from Supabase
   useEffect(() => {
-    const savedProfile = localStorage.getItem('user-profile');
-    if (savedProfile) {
+    const loadProfile = async () => {
+      if (!user) return;
+      
       try {
-        const parsedProfile = JSON.parse(savedProfile);
-        setPersonalInfo(parsedProfile);
+        const recipient = await supabaseWorkflowService.getRecipientById(user.id || user.email);
+        if (recipient) {
+          setProfileData({
+            name: recipient.name,
+            department: recipient.department,
+            designation: recipient.role_title || recipient.role,
+            employeeId: recipient.user_id
+          });
+        }
       } catch (error) {
-        console.error('Error loading saved profile:', error);
+        console.error('Error loading profile:', error);
       }
-    }
-  }, []);
+    };
+    
+    loadProfile();
+  }, [user]);
 
   if (!user) return null;
 
@@ -101,25 +118,25 @@ export const RoleDashboard: React.FC = () => {
                 "opacity-90 mt-1",
                 isMobile ? "text-sm" : "text-base"
               )}>
-                Logged in as <span className="font-semibold">{personalInfo?.name || user.name}</span>
+                Logged in as <span className="font-semibold">{profileData?.name || user.name}</span>
               </p>
               <div className="flex flex-wrap gap-2 mt-3">
                 <Badge className="bg-white/20 text-white border-white/30 font-medium">
                   Role: {dashboardConfig.displayName}
                 </Badge>
-                {(personalInfo?.department || user.department) && (
+                {(profileData?.department || user.department) && (
                   <Badge className="bg-white/20 text-white border-white/30">
-                    {personalInfo?.department || user.department}
+                    {profileData?.department || user.department}
                   </Badge>
                 )}
-                {personalInfo?.designation && (
+                {profileData?.designation && (
                   <Badge className="bg-white/20 text-white border-white/30">
-                    {personalInfo.designation}
+                    {profileData.designation}
                   </Badge>
                 )}
-                {personalInfo?.employeeId && (
+                {profileData?.employeeId && (
                   <Badge className="bg-white/20 text-white border-white/30">
-                    ID: {personalInfo.employeeId}
+                    ID: {profileData.employeeId}
                   </Badge>
                 )}
                 {user.branch && (

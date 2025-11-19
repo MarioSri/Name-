@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import { supabaseWorkflowService } from '@/services/SupabaseWorkflowService';
 
 export interface User {
   id: string;
@@ -113,43 +114,68 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     setIsLoading(true);
     
     try {
-      // Simulate authentication delay with minimum loading time
-      await new Promise(resolve => setTimeout(resolve, 2500));
+      // Simulate authentication delay
+      await new Promise(resolve => setTimeout(resolve, 1500));
       
-      const mockUser: User = {
-        id: `user-${Date.now()}`,
-        name: role === 'principal' ? 'Dr. Robert Smith' :
-              role === 'registrar' ? 'Prof. Sarah Johnson' :
-              role === 'hod' ? 'Dr. Rajesh Kumar' :
-              role === 'program-head' ? 'Prof. Anita Sharma' :
-              'Mr. John Doe',
-        email: `${role}@hitam.org`,
+      // Get all recipients from Supabase and find one matching the role
+      const recipients = await supabaseWorkflowService.getRecipients();
+      
+      // Map role to role_type in database
+      const roleTypeMap: { [key: string]: string } = {
+        'principal': 'Principal',
+        'registrar': 'Registrar',
+        'hod': 'HOD',
+        'program-head': 'Program Head',
+        'employee': 'EMPLOYEE'
+      };
+      
+      const roleType = roleTypeMap[role] || 'EMPLOYEE';
+      
+      // Find a recipient matching the role
+      const recipient = recipients.find(r => 
+        r.role === roleType || 
+        r.role_type === roleType ||
+        (roleType === 'EMPLOYEE' && r.role_type === 'EMPLOYEE')
+      );
+      
+      if (!recipient) {
+        throw new Error(`No user found with role: ${role}`);
+      }
+      
+      // Create user object from Supabase data
+      const authenticatedUser: User = {
+        id: recipient.user_id,
+        name: recipient.name,
+        email: recipient.email,
         role: role as User['role'],
-        department: role === 'hod' ? 'Computer Science & Engineering' : 
-                   role === 'program-head' ? 'Electronics & Communication' : undefined,
-        branch: role === 'hod' ? 'CSE' : 
-                role === 'program-head' ? 'ECE' : undefined,
+        department: recipient.department,
+        branch: recipient.branch,
+        avatar: recipient.avatar,
         permissions: getUserPermissions(role)
       };
 
-      setUser(mockUser);
+      console.log('✅ [AuthContext] User authenticated:', {
+        id: authenticatedUser.id,
+        name: authenticatedUser.name,
+        role: authenticatedUser.role
+      });
+
+      setUser(authenticatedUser);
       
       // Store in sessionStorage for persistence during browser session only
-      sessionStorage.setItem('iaoms-user', JSON.stringify(mockUser));
+      sessionStorage.setItem('iaoms-user', JSON.stringify(authenticatedUser));
       
-      // Check if this is the first login for tutorial (use localStorage for this)
+      // Check if this is the first login for tutorial
       const hasLoggedInBefore = localStorage.getItem('hasLoggedInBefore');
       if (!hasLoggedInBefore) {
         localStorage.setItem('isFirstLogin', 'true');
         localStorage.setItem('hasLoggedInBefore', 'true');
       }
       
-      // Success notification will be handled by the calling component
     } catch (error) {
       console.error('Login failed:', error);
       throw error;
     } finally {
-      // Ensure loading is always set to false
       setIsLoading(false);
     }
   };

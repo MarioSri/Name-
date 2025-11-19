@@ -213,6 +213,7 @@ export const WorkflowConfiguration: React.FC<WorkflowConfigurationProps> = ({ cl
       const currentUserName = userProfile.name || user?.fullName || user?.name || 'User';
       const currentUserDept = userProfile.department || user?.department || 'Department';
       const currentUserDesignation = userProfile.designation || user?.role || 'Employee';
+      const currentUserRole = user?.role || 'employee';
       
       // Convert files to base64 for localStorage storage
       const convertFilesToBase64 = async (files: File[]) => {
@@ -496,6 +497,18 @@ export const WorkflowConfiguration: React.FC<WorkflowConfigurationProps> = ({ cl
           });
           localStorage.setItem('submitted-documents', JSON.stringify(cardsWithoutOldFiles));
         }
+        
+        // ✅ Dispatch event for Track Documents to update in real-time
+        console.log('📢 [Approval Chain Bypass] Dispatching workflow-updated event for Track Documents');
+        window.dispatchEvent(new CustomEvent('workflow-updated', {
+          detail: { trackingCard }
+        }));
+        
+        // ✅ Dispatch storage event for cross-tab sync
+        window.dispatchEvent(new StorageEvent('storage', {
+          key: 'submitted-documents',
+          newValue: JSON.stringify(limitedCards)
+        }));
       } catch (error) {
         console.error('❌ Failed to save to submitted-documents:', error);
         toast({

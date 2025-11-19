@@ -1639,8 +1639,9 @@ const Approvals = () => {
     
     const currentUserName = user?.name || '';
     const currentUserRole = user?.role || '';
+    const currentUserId = user?.id || '';
     
-    console.log(`🔍 Checking card "${doc.title}" for user: ${currentUserName} (${currentUserRole})`);
+    console.log(`🔍 Checking card "${doc.title}" for user: ${currentUserName} (${currentUserRole}) [${currentUserId}]`);
     
     // Check recipientIds first (most reliable)
     if (doc.recipientIds && doc.recipientIds.length > 0) {
@@ -1649,6 +1650,12 @@ const Approvals = () => {
       const matchesRecipientId = doc.recipientIds.some((recipientId: string) => {
         const recipientLower = recipientId.toLowerCase();
         const userRoleLower = currentUserRole.toLowerCase();
+        
+        // ✅ Check UUID match first (for Supabase recipients)
+        if (recipientId === currentUserId) {
+          console.log(`  "${recipientId}" -> UUID MATCH`);
+          return true;
+        }
         
         // Enhanced matching for all roles including employee
         const isMatch = recipientLower.includes(userRoleLower) ||

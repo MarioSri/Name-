@@ -56,7 +56,10 @@ export const NotificationCenter: React.FC = () => {
   };
 
   const markAllRead = () => {
-    // Implementation for mark all read
+    const updatedNotifications = notifications.map(n => ({ ...n, read: true }));
+    localStorage.setItem('notifications', JSON.stringify(updatedNotifications));
+    setNotifications(updatedNotifications);
+    setUnreadCount(0);
   };
 
   const clearAll = () => {
@@ -71,7 +74,7 @@ export const NotificationCenter: React.FC = () => {
         <Button variant="ghost" size="sm" className="relative">
           <Bell className="w-4 h-4" />
           {unreadCount > 0 && (
-            <Badge className="absolute -top-1 -right-1 w-5 h-5 p-0 text-xs">
+            <Badge className="absolute -top-1 -right-1 min-w-5 h-5 px-1 flex items-center justify-center rounded-full text-xs">
               {unreadCount}
             </Badge>
           )}
