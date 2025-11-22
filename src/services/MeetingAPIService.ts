@@ -12,6 +12,14 @@ import {
 } from '@/types/meeting';
 import { mockMeetingService } from './MockMeetingService';
 
+// Cryptographically secure ID generation
+function generateSecureId(prefix: string): string {
+  const array = new Uint8Array(16);
+  crypto.getRandomValues(array);
+  const randomString = Array.from(array, byte => byte.toString(36).padStart(2, '0')).join('').substring(0, 9);
+  return `${prefix}-${Date.now()}-${randomString}`;
+}
+
 export class MeetingAPIService {
   private googleApiKey: string;
   private googleClientId: string;
@@ -70,13 +78,23 @@ export class MeetingAPIService {
 
   async createGoogleMeetEvent(meeting: Partial<Meeting>): Promise<GoogleMeetInfo> {
     try {
+      // Explicit check for gapi availability
+      if (typeof window === 'undefined' || typeof window.gapi === 'undefined') {
+        throw new Error('Google API not loaded. Please refresh the page and try again.');
+      }
+
       // Check if user is authenticated with Google
-      const isSignedIn = window.gapi?.auth2?.getAuthInstance()?.isSignedIn?.get();
+      const authInstance = window.gapi?.auth2?.getAuthInstance();
+      if (!authInstance) {
+        throw new Error('Google Auth not initialized. Please refresh the page and try again.');
+      }
+
+      const isSignedIn = authInstance.isSignedIn?.get();
       
       if (!isSignedIn) {
         console.warn('User not signed in to Google. Attempting to sign in...');
         try {
-          await window.gapi.auth2.getAuthInstance().signIn();
+          await authInstance.signIn();
         } catch (authError) {
           console.error('Google authentication failed:', authError);
           throw new Error('Google authentication required. Please sign in with your Google account.');
@@ -105,7 +123,7 @@ export class MeetingAPIService {
         })) || [],
         conferenceData: {
           createRequest: {
-            requestId: `meet-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+            requestId: generateSecureId('meet'),
             conferenceSolutionKey: {
               type: 'hangoutsMeet'
             }
@@ -133,15 +151,23 @@ export class MeetingAPIService {
       }
 
       const conferenceData = response.result.conferenceData;
-      const meetingLink = conferenceData?.entryPoints?.find((ep: any) => ep.entryPointType === 'video')?.uri || 
-                         response.result.hangoutLink || 
-                         'https://meet.google.com/new';
+      
+      // Safe property access with proper fallback logic
+      let meetingLink = 'https://meet.google.com/new';
+      if (conferenceData?.entryPoints && Array.isArray(conferenceData.entryPoints)) {
+        const videoEntry = conferenceData.entryPoints.find((ep: any) => ep.entryPointType === 'video');
+        if (videoEntry?.uri) {
+          meetingLink = videoEntry.uri;
+        }
+      } else if (response.result.hangoutLink) {
+        meetingLink = response.result.hangoutLink;
+      }
 
       return {
-        meetingId: response.result.id || `meet-${Date.now()}`,
+        meetingId: response.result.id || generateSecureId('meet'),
         joinUrl: meetingLink,
         hangoutLink: meetingLink,
-        conferenceId: conferenceData?.conferenceId || `conf-${Date.now()}`,
+        conferenceId: conferenceData?.conferenceId || generateSecureId('conf'),
         requestId: conferenceData?.createRequest?.requestId || event.conferenceData.createRequest.requestId,
         status: 'success',
         createdAt: new Date()
@@ -191,31 +217,52 @@ export class MeetingAPIService {
         }
       };
 
-      const response = await fetch('https://api.zoom.us/v2/users/me/meetings', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${accessToken}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(meetingData)
-      });
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout
 
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(`Zoom API error: ${errorData.message || response.statusText}`);
+      try {
+        const response = await fetch('https://api.zoom.us/v2/users/me/meetings', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${accessToken}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(meetingData),
+          signal: controller.signal
+        });
+
+        clearTimeout(timeoutId);
+
+        if (!response.ok) {
+          const errorData = await response.json();
+          throw new Error(`Zoom API error: ${errorData.message || response.statusText}`);
+        }
+
+        const zoomMeeting = await response.json();
+
+        // Validate Zoom meeting ID before conversion
+        if (!zoomMeeting.id || (typeof zoomMeeting.id !== 'number' && typeof zoomMeeting.id !== 'string')) {
+          throw new Error('Invalid Zoom meeting ID received from API');
+        }
+
+        const meetingId = String(zoomMeeting.id);
+
+        return {
+          meetingId,
+          joinUrl: zoomMeeting.join_url || '',
+          startUrl: zoomMeeting.start_url || '',
+          password: zoomMeeting.password || '',
+          meetingNumber: meetingId,
+          status: 'waiting',
+          createdAt: new Date()
+        };
+      } catch (fetchError: any) {
+        clearTimeout(timeoutId);
+        if (fetchError.name === 'AbortError') {
+          throw new Error('Zoom API request timed out. Please try again.');
+        }
+        throw fetchError;
       }
-
-      const zoomMeeting = await response.json();
-
-      return {
-        meetingId: zoomMeeting.id.toString(),
-        joinUrl: zoomMeeting.join_url,
-        startUrl: zoomMeeting.start_url,
-        password: zoomMeeting.password || '',
-        meetingNumber: zoomMeeting.id.toString(),
-        status: 'waiting',
-        createdAt: new Date()
-      };
     } catch (error: any) {
       console.error('Zoom meeting creation failed:', error);
       
@@ -223,6 +270,8 @@ export class MeetingAPIService {
       if (error.message?.includes('access token')) {
         throw new Error('Zoom authentication failed. Please check your credentials.');
       } else if (error.message?.includes('Zoom API error')) {
+        throw error;
+      } else if (error.message?.includes('timed out')) {
         throw error;
       } else {
         throw new Error('Failed to create Zoom meeting. Please check your internet connection and try again.');
@@ -232,23 +281,37 @@ export class MeetingAPIService {
 
   private async getZoomAccessToken(): Promise<string> {
     try {
-      const response = await fetch(`${this.apiUrl}/zoom/auth/token`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          clientId: this.zoomClientId,
-          clientSecret: this.zoomClientSecret
-        })
-      });
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
 
-      if (!response.ok) {
-        throw new Error('Failed to get Zoom access token');
+      try {
+        const response = await fetch(`${this.apiUrl}/zoom/auth/token`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            clientId: this.zoomClientId,
+            clientSecret: this.zoomClientSecret
+          }),
+          signal: controller.signal
+        });
+
+        clearTimeout(timeoutId);
+
+        if (!response.ok) {
+          throw new Error('Failed to get Zoom access token');
+        }
+
+        const data = await response.json();
+        return data.access_token;
+      } catch (fetchError: any) {
+        clearTimeout(timeoutId);
+        if (fetchError.name === 'AbortError') {
+          throw new Error('Zoom authentication request timed out');
+        }
+        throw fetchError;
       }
-
-      const data = await response.json();
-      return data.access_token;
     } catch (error) {
       console.error('Zoom auth failed:', error);
       throw error;
@@ -285,29 +348,52 @@ export class MeetingAPIService {
         onlineMeetingProvider: 'teamsForBusiness'
       };
 
-      const response = await fetch('https://graph.microsoft.com/v1.0/me/events', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${accessToken}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(meetingData)
-      });
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout
 
-      if (!response.ok) {
-        throw new Error(`Microsoft Graph API error: ${response.statusText}`);
+      try {
+        const response = await fetch('https://graph.microsoft.com/v1.0/me/events', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${accessToken}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(meetingData),
+          signal: controller.signal
+        });
+
+        clearTimeout(timeoutId);
+
+        if (!response.ok) {
+          const errorText = await response.text();
+          let errorMessage = response.statusText;
+          try {
+            const errorData = JSON.parse(errorText);
+            errorMessage = errorData.error?.message || errorMessage;
+          } catch {
+            // If error response is not JSON, use text
+            errorMessage = errorText || errorMessage;
+          }
+          throw new Error(`Microsoft Graph API error: ${errorMessage}`);
+        }
+
+        const teamsEvent = await response.json();
+
+        return {
+          meetingId: teamsEvent.id || '',
+          joinUrl: teamsEvent.onlineMeeting?.joinUrl || '',
+          joinWebUrl: teamsEvent.onlineMeeting?.joinWebUrl || '',
+          conferenceId: teamsEvent.onlineMeeting?.conferenceId || '',
+          organizerId: teamsEvent.organizer?.emailAddress?.address || '',
+          createdAt: new Date()
+        };
+      } catch (fetchError: any) {
+        clearTimeout(timeoutId);
+        if (fetchError.name === 'AbortError') {
+          throw new Error('Teams meeting creation timed out. Please try again.');
+        }
+        throw fetchError;
       }
-
-      const teamsEvent = await response.json();
-
-      return {
-        meetingId: teamsEvent.id,
-        joinUrl: teamsEvent.onlineMeeting?.joinUrl || '',
-        joinWebUrl: teamsEvent.onlineMeeting?.joinWebUrl || '',
-        conferenceId: teamsEvent.onlineMeeting?.conferenceId || '',
-        organizerId: teamsEvent.organizer?.emailAddress?.address || '',
-        createdAt: new Date()
-      };
     } catch (error) {
       console.error('Teams meeting creation failed:', error);
       throw new Error('Failed to create Teams meeting');
@@ -316,24 +402,38 @@ export class MeetingAPIService {
 
   private async getMicrosoftAccessToken(): Promise<string> {
     try {
-      const response = await fetch(`${this.apiUrl}/microsoft/auth/token`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          clientId: this.msClientId,
-          clientSecret: this.msClientSecret,
-          tenantId: this.msTenantId
-        })
-      });
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
 
-      if (!response.ok) {
-        throw new Error('Failed to get Microsoft access token');
+      try {
+        const response = await fetch(`${this.apiUrl}/microsoft/auth/token`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            clientId: this.msClientId,
+            clientSecret: this.msClientSecret,
+            tenantId: this.msTenantId
+          }),
+          signal: controller.signal
+        });
+
+        clearTimeout(timeoutId);
+
+        if (!response.ok) {
+          throw new Error('Failed to get Microsoft access token');
+        }
+
+        const data = await response.json();
+        return data.access_token;
+      } catch (fetchError: any) {
+        clearTimeout(timeoutId);
+        if (fetchError.name === 'AbortError') {
+          throw new Error('Microsoft authentication request timed out');
+        }
+        throw fetchError;
       }
-
-      const data = await response.json();
-      return data.access_token;
     } catch (error) {
       console.error('Microsoft auth failed:', error);
       throw error;
@@ -351,9 +451,12 @@ export class MeetingAPIService {
         primary: meeting.type === 'online' ? 'google-meet' : 'physical'
       };
 
-      // Create meeting links based on type
+      // Create meeting links based on type - Respect meetingLinks.primary field
       if (meeting.type === 'online' || meeting.type === 'hybrid') {
-        switch (meeting.location?.toLowerCase()) {
+        // Check if meeting already has a primary platform preference
+        const preferredPlatform = meeting.meetingLinks?.primary || meeting.location?.toLowerCase();
+        
+        switch (preferredPlatform) {
           case 'google-meet':
           case 'meet':
             meetingLinks.googleMeet = await this.createGoogleMeetEvent(meeting);
@@ -369,7 +472,7 @@ export class MeetingAPIService {
             meetingLinks.primary = 'teams';
             break;
           default:
-            // Default to Google Meet
+            // Default to Google Meet only if no preference specified
             meetingLinks.googleMeet = await this.createGoogleMeetEvent(meeting);
             meetingLinks.primary = 'google-meet';
         }
@@ -379,7 +482,7 @@ export class MeetingAPIService {
       const savedMeeting = await this.saveMeetingToDatabase({
         ...meeting,
         meetingLinks,
-        id: `meeting-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+        id: generateSecureId('meeting'),
         createdAt: new Date(),
         updatedAt: new Date()
       } as Meeting);
@@ -405,20 +508,40 @@ export class MeetingAPIService {
     }
     
     try {
-      const response = await fetch(`${this.apiUrl}/meetings/conflicts`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          date: meeting.date,
-          time: meeting.time,
-          duration: meeting.duration,
-          attendees: meeting.attendees?.map(a => a.id)
-        })
-      });
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 15000); // 15 second timeout
 
-      return await response.json();
+      try {
+        const response = await fetch(`${this.apiUrl}/meetings/conflicts`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            date: meeting.date,
+            time: meeting.time,
+            duration: meeting.duration,
+            attendees: meeting.attendees?.map(a => a.id)
+          }),
+          signal: controller.signal
+        });
+
+        clearTimeout(timeoutId);
+
+        if (!response.ok) {
+          console.warn('Conflict check API returned error:', response.statusText);
+          return { hasConflict: false, conflicts: [], suggestions: [] };
+        }
+
+        const data = await response.json();
+        return data;
+      } catch (fetchError: any) {
+        clearTimeout(timeoutId);
+        if (fetchError.name === 'AbortError') {
+          console.warn('Conflict check timed out');
+        }
+        throw fetchError;
+      }
     } catch (error) {
       console.error('Conflict check failed:', error);
       return { hasConflict: false, conflicts: [], suggestions: [] };
@@ -432,22 +555,41 @@ export class MeetingAPIService {
     }
     
     try {
-      const response = await fetch(`${this.apiUrl}/meetings/ai-suggestions`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          title: meeting.title,
-          description: meeting.description,
-          attendees: meeting.attendees?.map(a => a.id),
-          preferredDuration: meeting.duration,
-          department: meeting.department,
-          priority: meeting.priority
-        })
-      });
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 20000); // 20 second timeout
 
-      return await response.json();
+      try {
+        const response = await fetch(`${this.apiUrl}/meetings/ai-suggestions`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            title: meeting.title,
+            description: meeting.description,
+            attendees: meeting.attendees?.map(a => a.id),
+            preferredDuration: meeting.duration,
+            department: meeting.department,
+            priority: meeting.priority
+          }),
+          signal: controller.signal
+        });
+
+        clearTimeout(timeoutId);
+
+        if (!response.ok) {
+          throw new Error(`AI suggestions API error: ${response.statusText}`);
+        }
+
+        const data = await response.json();
+        return data;
+      } catch (fetchError: any) {
+        clearTimeout(timeoutId);
+        if (fetchError.name === 'AbortError') {
+          throw new Error('AI suggestions request timed out');
+        }
+        throw fetchError;
+      }
     } catch (error) {
       console.error('AI suggestions failed:', error);
       throw error;
@@ -457,8 +599,30 @@ export class MeetingAPIService {
   // Attendance tracking
   async trackAttendance(meetingId: string): Promise<AttendanceRecord[]> {
     try {
-      const response = await fetch(`${this.apiUrl}/meetings/${meetingId}/attendance`);
-      return await response.json();
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
+
+      try {
+        const response = await fetch(`${this.apiUrl}/meetings/${meetingId}/attendance`, {
+          signal: controller.signal
+        });
+
+        clearTimeout(timeoutId);
+
+        if (!response.ok) {
+          console.warn('Attendance tracking API returned error:', response.statusText);
+          return [];
+        }
+
+        const data = await response.json();
+        return Array.isArray(data) ? data : [];
+      } catch (fetchError: any) {
+        clearTimeout(timeoutId);
+        if (fetchError.name === 'AbortError') {
+          console.warn('Attendance tracking timed out');
+        }
+        throw fetchError;
+      }
     } catch (error) {
       console.error('Attendance tracking failed:', error);
       return [];
@@ -468,15 +632,34 @@ export class MeetingAPIService {
   // Meeting management
   async updateMeeting(meetingId: string, updates: Partial<Meeting>): Promise<Meeting> {
     try {
-      const response = await fetch(`${this.apiUrl}/meetings/${meetingId}`, {
-        method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(updates)
-      });
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 15000); // 15 second timeout
 
-      return await response.json();
+      try {
+        const response = await fetch(`${this.apiUrl}/meetings/${meetingId}`, {
+          method: 'PATCH',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(updates),
+          signal: controller.signal
+        });
+
+        clearTimeout(timeoutId);
+
+        if (!response.ok) {
+          throw new Error(`Meeting update API error: ${response.statusText}`);
+        }
+
+        const data = await response.json();
+        return data;
+      } catch (fetchError: any) {
+        clearTimeout(timeoutId);
+        if (fetchError.name === 'AbortError') {
+          throw new Error('Meeting update request timed out');
+        }
+        throw fetchError;
+      }
     } catch (error) {
       console.error('Meeting update failed:', error);
       throw error;
@@ -485,15 +668,29 @@ export class MeetingAPIService {
 
   async cancelMeeting(meetingId: string, reason?: string): Promise<boolean> {
     try {
-      const response = await fetch(`${this.apiUrl}/meetings/${meetingId}/cancel`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({ reason })
-      });
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 15000); // 15 second timeout
 
-      return response.ok;
+      try {
+        const response = await fetch(`${this.apiUrl}/meetings/${meetingId}/cancel`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ reason }),
+          signal: controller.signal
+        });
+
+        clearTimeout(timeoutId);
+
+        return response.ok;
+      } catch (fetchError: any) {
+        clearTimeout(timeoutId);
+        if (fetchError.name === 'AbortError') {
+          console.warn('Meeting cancellation timed out');
+        }
+        throw fetchError;
+      }
     } catch (error) {
       console.error('Meeting cancellation failed:', error);
       return false;
@@ -502,12 +699,33 @@ export class MeetingAPIService {
 
   async generateMOM(meetingId: string): Promise<string> {
     try {
-      const response = await fetch(`${this.apiUrl}/meetings/${meetingId}/mom`, {
-        method: 'POST'
-      });
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout (MOM generation may take longer)
 
-      const data = await response.json();
-      return data.momUrl;
+      try {
+        const response = await fetch(`${this.apiUrl}/meetings/${meetingId}/mom`, {
+          method: 'POST',
+          signal: controller.signal
+        });
+
+        clearTimeout(timeoutId);
+
+        if (!response.ok) {
+          throw new Error(`MOM generation API error: ${response.statusText}`);
+        }
+
+        const data = await response.json();
+        if (!data.momUrl) {
+          throw new Error('Invalid MOM response: missing momUrl');
+        }
+        return data.momUrl;
+      } catch (fetchError: any) {
+        clearTimeout(timeoutId);
+        if (fetchError.name === 'AbortError') {
+          throw new Error('MOM generation timed out');
+        }
+        throw fetchError;
+      }
     } catch (error) {
       console.error('MOM generation failed:', error);
       throw error;
@@ -533,15 +751,34 @@ export class MeetingAPIService {
 
   private async saveMeetingToDatabase(meeting: Meeting): Promise<Meeting> {
     try {
-      const response = await fetch(`${this.apiUrl}/meetings`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(meeting)
-      });
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 15000); // 15 second timeout
 
-      return await response.json();
+      try {
+        const response = await fetch(`${this.apiUrl}/meetings`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(meeting),
+          signal: controller.signal
+        });
+
+        clearTimeout(timeoutId);
+
+        if (!response.ok) {
+          throw new Error(`Database save API error: ${response.statusText}`);
+        }
+
+        const data = await response.json();
+        return data;
+      } catch (fetchError: any) {
+        clearTimeout(timeoutId);
+        if (fetchError.name === 'AbortError') {
+          throw new Error('Database save request timed out');
+        }
+        throw fetchError;
+      }
     } catch (error) {
       console.error('Database save failed:', error);
       throw error;
@@ -550,14 +787,34 @@ export class MeetingAPIService {
 
   private async sendMeetingNotifications(meeting: Meeting): Promise<any[]> {
     try {
-      const response = await fetch(`${this.apiUrl}/meetings/${meeting.id}/notifications`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        }
-      });
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 15000); // 15 second timeout
 
-      return await response.json();
+      try {
+        const response = await fetch(`${this.apiUrl}/meetings/${meeting.id}/notifications`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          signal: controller.signal
+        });
+
+        clearTimeout(timeoutId);
+
+        if (!response.ok) {
+          console.warn('Notification API returned error:', response.statusText);
+          return [];
+        }
+
+        const data = await response.json();
+        return Array.isArray(data) ? data : [];
+      } catch (fetchError: any) {
+        clearTimeout(timeoutId);
+        if (fetchError.name === 'AbortError') {
+          console.warn('Notification request timed out');
+        }
+        throw fetchError;
+      }
     } catch (error) {
       console.error('Notification sending failed:', error);
       return [];
