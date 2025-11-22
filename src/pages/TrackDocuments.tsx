@@ -2,14 +2,20 @@ import { useState } from "react";
 import { DashboardLayout } from "@/components/DashboardLayout";
 import { DocumentTracker } from "@/components/DocumentTracker";
 import { FileViewer } from "@/components/FileViewer";
+import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
+import { useSupabaseRealTimeDocuments } from "@/hooks/useSupabaseRealTimeDocuments";
 
 const TrackDocuments = () => {
   const { user, logout } = useAuth();
   const { toast } = useToast();
   const navigate = useNavigate();
+  
+  // Check Supabase connection status
+  const { isConnected: supabaseConnected } = useSupabaseRealTimeDocuments();
+  
   const [viewingFile, setViewingFile] = useState<File | null>(null);
   const [viewingFiles, setViewingFiles] = useState<File[]>([]);
   const [showFileViewer, setShowFileViewer] = useState(false);
@@ -42,9 +48,11 @@ const TrackDocuments = () => {
   return (
     <DashboardLayout userRole={user.role} onLogout={handleLogout}>
       <div className="container mx-auto p-6">
-        <div className="mb-6">
-          <h1 className="text-3xl font-bold text-foreground mb-2">Track Documents</h1>
-          <p className="text-muted-foreground">Monitor the status and progress of your submitted documents</p>
+        <div className="mb-6 flex items-center justify-between">
+          <div>
+            <h1 className="text-3xl font-bold text-foreground mb-2">Track Documents</h1>
+            <p className="text-muted-foreground">Monitor the status and progress of your submitted documents</p>
+          </div>
         </div>
 
         <div className="space-y-6">

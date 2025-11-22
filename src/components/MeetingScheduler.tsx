@@ -16,6 +16,7 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { LiveMeetingRequestModal } from "./LiveMeetingRequestModal";
 import { useAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/hooks/use-toast";
+import { useSupabaseRealTimeMeetings } from "@/hooks/useSupabaseRealTimeMeetings";
 import { meetingAPI } from "@/services/MeetingAPIService";
 import { 
   filterMeetingsByRecipient, 
@@ -160,6 +161,16 @@ export function MeetingScheduler({ userRole, className }: MeetingSchedulerProps)
   const { user } = useAuth();
   const { toast } = useToast();
   
+  // Supabase Realtime for meetings
+  const {
+    meetings: supabaseMeetings,
+    createMeeting: createSupabaseMeeting,
+    updateMeeting: updateSupabaseMeeting,
+    deleteMeeting: deleteSupabaseMeeting,
+    loading: supabaseLoading,
+    isConnected: supabaseConnected
+  } = useSupabaseRealTimeMeetings();
+  
   // State Management
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [currentMonth, setCurrentMonth] = useState(new Date());
@@ -179,9 +190,11 @@ export function MeetingScheduler({ userRole, className }: MeetingSchedulerProps)
   const [editingMeeting, setEditingMeeting] = useState<Meeting | null>(null);
   
   // Computed filtered meetings - only show meetings where user is organizer or attendee
+  // Use Supabase meetings if connected, otherwise use local storage
   const meetings = useMemo(() => {
-    return filterMeetingsByRecipient(allMeetings, user);
-  }, [allMeetings, user]);
+    const sourceMeetings = supabaseConnected ? supabaseMeetings : allMeetings;
+    return filterMeetingsByRecipient(sourceMeetings, user);
+  }, [supabaseConnected, supabaseMeetings, allMeetings, user]);
   
   // New Meeting Form State
   const [newMeeting, setNewMeeting] = useState<Partial<Meeting>>({

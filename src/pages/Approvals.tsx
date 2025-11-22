@@ -16,6 +16,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { ExternalNotificationDispatcher } from "@/services/ExternalNotificationDispatcher";
 import { isUserInRecipients, findUserStepInWorkflow } from "@/utils/recipientMatching";
 import { useRealTimeDocuments } from "@/hooks/useRealTimeDocuments";
+import { useSupabaseRealTimeDocuments } from "@/hooks/useSupabaseRealTimeDocuments";
 import isJpg from 'is-jpg';
 import { recordAction } from '@/lib/auditLogger';
 
@@ -23,7 +24,35 @@ const Approvals = () => {
   const { user, logout } = useAuth();
   const { toast } = useToast();
   const navigate = useNavigate();
-  const { approvalCards, approveDocument, rejectDocument, loading, error } = useRealTimeDocuments();
+  
+  // Try Supabase first, fallback to localStorage-based system
+  const supabaseHook = useSupabaseRealTimeDocuments();
+  const localStorageHook = useRealTimeDocuments();
+  
+  // Use Supabase if connected, otherwise fallback to localStorage
+  const isUsingSupabase = supabaseHook.isConnected;
+  const {
+    approvalCards,
+    loading,
+    error
+  } = isUsingSupabase ? supabaseHook : localStorageHook;
+  
+  // Create unified approve/reject functions
+  const approveDocument = async (documentId: string, comments?: string) => {
+    if (isUsingSupabase) {
+      await supabaseHook.approveDocument(documentId, comments);
+    } else {
+      await localStorageHook.approveDocument(documentId, comments);
+    }
+  };
+  
+  const rejectDocument = async (documentId: string, reason: string) => {
+    if (isUsingSupabase) {
+      await supabaseHook.rejectDocument(documentId, reason);
+    } else {
+      await localStorageHook.rejectDocument(documentId, reason);
+    }
+  };
   const [showLiveMeetingModal, setShowLiveMeetingModal] = useState(false);
   const [selectedDocument, setSelectedDocument] = useState({ id: '', type: 'letter', title: '' });
   const [showDocumenso, setShowDocumenso] = useState(false);
@@ -2052,9 +2081,11 @@ const Approvals = () => {
   return (
     <DashboardLayout userRole={user.role} onLogout={handleLogout}>
       <div className="container mx-auto p-6">
-        <div className="mb-6">
-          <h1 className="text-3xl font-bold text-foreground mb-2">Approval Center</h1>
-          <p className="text-muted-foreground">Review and approve pending documents with digital signatures</p>
+        <div className="mb-6 flex items-center justify-between">
+          <div>
+            <h1 className="text-3xl font-bold text-foreground mb-2">Approval Center</h1>
+            <p className="text-muted-foreground">Review and approve pending documents with digital signatures</p>
+          </div>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">

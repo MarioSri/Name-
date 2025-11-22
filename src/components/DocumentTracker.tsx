@@ -37,6 +37,7 @@ import { DigitalSignature } from "./DigitalSignature";
 import { useToast } from "@/hooks/use-toast";
 import { isUserInvolvedInDocument } from "@/utils/recipientMatching";
 import { useRealTimeDocuments } from "@/hooks/useRealTimeDocuments";
+import { useSupabaseRealTimeDocuments } from "@/hooks/useSupabaseRealTimeDocuments";
 import isJpg from 'is-jpg';
 
 interface DocumentTrackerProps {
@@ -230,7 +231,29 @@ export const DocumentTracker: React.FC<DocumentTrackerProps> = ({ userRole, user
   const [approvalComments, setApprovalComments] = useState<{[key: string]: any[]}>({});
 
   const { toast } = useToast();
-  const { trackDocuments, loading, error, updateRecipients } = useRealTimeDocuments();
+  
+  // Try Supabase first, fallback to localStorage-based system
+  const supabaseHook = useSupabaseRealTimeDocuments();
+  const localStorageHook = useRealTimeDocuments();
+  
+  // Use Supabase if connected, otherwise fallback to localStorage
+  const isUsingSupabase = supabaseHook.isConnected;
+  const {
+    trackDocuments,
+    loading,
+    error,
+  } = isUsingSupabase ? supabaseHook : localStorageHook;
+  
+  // Create unified updateRecipients function
+  const updateRecipients = async (documentId: string, recipients: string[], recipientIds: string[]) => {
+    if (isUsingSupabase) {
+      // For Supabase, update the document's recipients array
+      await supabaseHook.updateDocument(documentId, { recipients: recipientIds });
+    } else {
+      // Use localStorage hook's updateRecipients
+      await localStorageHook.updateRecipients(documentId, recipients, recipientIds);
+    }
+  };
   
 
 

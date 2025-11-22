@@ -1,8 +1,10 @@
 import { DashboardLayout } from "@/components/DashboardLayout";
 import { DocumentUploader } from "@/components/DocumentUploader";
+import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
+import { useSupabaseRealTimeDocuments } from "@/hooks/useSupabaseRealTimeDocuments";
 import { ExternalNotificationDispatcher } from "@/services/ExternalNotificationDispatcher";
 import { channelAutoCreationService } from "@/services/ChannelAutoCreationService";
 
@@ -10,6 +12,9 @@ const Documents = () => {
   const { user, logout } = useAuth();
   const { toast } = useToast();
   const navigate = useNavigate();
+  
+  // Check Supabase connection and get submit function
+  const { isConnected: supabaseConnected, submitDocument: submitToSupabase } = useSupabaseRealTimeDocuments();
 
   const handleLogout = () => {
     logout();
@@ -431,9 +436,11 @@ const Documents = () => {
   return (
     <DashboardLayout userRole={user.role} onLogout={handleLogout}>
       <div className="container mx-auto p-6">
-        <div className="mb-6">
-          <h1 className="text-3xl font-bold text-foreground mb-2">Document Management</h1>
-          <p className="text-muted-foreground">Submit Your Permission Reports, Letters, and Circulars</p>
+        <div className="mb-6 flex items-center justify-between">
+          <div>
+            <h1 className="text-3xl font-bold text-foreground mb-2">Document Management</h1>
+            <p className="text-muted-foreground">Submit Your Permission Reports, Letters, and Circulars</p>
+          </div>
         </div>
 
         <div className="space-y-6">

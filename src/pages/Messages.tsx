@@ -8,6 +8,7 @@ import { ChatInterface } from "@/components/ChatInterface";
 import { LiveMeetingRequestManager } from "@/components/LiveMeetingRequestManager";
 import { DecentralizedChatService } from "@/services/DecentralizedChatService";
 import { useAuth } from "@/contexts/AuthContext";
+import { useSupabaseRealTimeMessages } from "@/hooks/useSupabaseRealTimeMessages";
 import { 
   MessageCircle, 
   Users, 
@@ -40,14 +41,19 @@ const Messages = () => {
   const { user, logout } = useAuth();
   const { toast } = useToast();
   const navigate = useNavigate();
+  
+  // Supabase Realtime integration
+  const supabaseMessages = useSupabaseRealTimeMessages();
+  const isUsingSupabase = supabaseMessages.isConnected;
+  
   const [chatService] = useState(() => new DecentralizedChatService(
     import.meta.env.VITE_WS_URL || 'ws://localhost:8080',
     import.meta.env.VITE_API_URL || 'http://localhost:3000/api'
   ));
   const [isInitialized, setIsInitialized] = useState(false);
 
-  // Memoized initial data for instant loading
-  const initialStats = useMemo(() => ({
+  // Initial state - will be updated based on connection mode
+  const [stats, setStats] = useState({
     unreadMessages: 26,
     pendingSignatures: 2,
     activePolls: 1,
@@ -55,16 +61,25 @@ const Messages = () => {
     totalChannels: 5,
     notifications: 4,
     liveMeetingRequests: 3
-  }), []);
+  });
 
-  const initialChannelCounts = useMemo(() => ({
+  const [channelMessageCounts, setChannelMessageCounts] = useState({
     'Administrative Council': 9,
     'Faculty Board': 5,
     'General': 12
-  }), []);
-
-  const [stats, setStats] = useState(initialStats);
-  const [channelMessageCounts, setChannelMessageCounts] = useState(initialChannelCounts);
+  });
+  
+  // Update stats when Supabase data changes
+  useEffect(() => {
+    if (isUsingSupabase) {
+      setStats(prev => ({
+        ...prev,
+        unreadMessages: supabaseMessages.totalUnread,
+        onlineUsers: supabaseMessages.onlineUsers.length,
+        totalChannels: supabaseMessages.channels.length
+      }));
+    }
+  }, [isUsingSupabase, supabaseMessages.totalUnread, supabaseMessages.onlineUsers.length, supabaseMessages.channels.length]);
   const [liveMeetRequests, setLiveMeetRequests] = useState<any[]>([]);
 
   // Memoized data initialization for instant loading
@@ -98,79 +113,103 @@ const Messages = () => {
 
   // Optimized callbacks
   const updateMessageCounts = useCallback(() => {
-    setChannelMessageCounts(prev => {
-      const channels = Object.keys(prev);
-      const randomChannel = channels[Math.floor(Math.random() * channels.length)];
-      const newCounts = { ...prev };
-      newCounts[randomChannel] = prev[randomChannel] + 1;
-      
-      const totalMessages = Object.values(newCounts).reduce((sum, count) => sum + count, 0);
-      setStats(prevStats => ({ ...prevStats, unreadMessages: totalMessages }));
-      
-      return newCounts;
-    });
-  }, []);
+    // Only update local channel counts if not using Supabase
+    if (!isUsingSupabase) {
+      setChannelMessageCounts(prev => {
+        const channels = Object.keys(prev);
+        const randomChannel = channels[Math.floor(Math.random() * channels.length)];
+        const newCounts = { ...prev };
+        newCounts[randomChannel] = prev[randomChannel] + 1;
+        
+        return newCounts;
+      });
+    }
+  }, [isUsingSupabase]);
+
+  // Sync stats with channel counts
+  useEffect(() => {
+    if (!isUsingSupabase) {
+      const totalMessages = Object.values(channelMessageCounts).reduce((sum, count) => sum + count, 0);
+      setStats(prev => ({ ...prev, unreadMessages: totalMessages }));
+    }
+  }, [channelMessageCounts, isUsingSupabase]);
 
   const loadLiveMeetRequests = useCallback(() => {
-    // Load all LiveMeet+ requests from localStorage
-    const allRequests = JSON.parse(localStorage.getItem('livemeet-requests') || '[]');
-    
-    if (!user) {
-      setLiveMeetRequests([]);
+    try {
+      // Load all LiveMeet+ requests from localStorage
+      const allRequests = JSON.parse(localStorage.getItem('livemeet-requests') || '[]');
+      
+      if (!user) {
+        // Batch state updates using functional form
+        setStats(prev => ({ ...prev, liveMeetingRequests: 0 }));
+        setLiveMeetRequests([]);
+        return;
+      }
+      
+      // Get current user information
+      const currentUserId = user.id;
+      const currentUserName = user.name;
+      
+      // ⭐ FILTER: Show only requests where current user is a target participant (NOT the initiator)
+      const filteredRequests = allRequests.filter((request: any) => {
+        // First, check if user is the initiator - if so, EXCLUDE this request
+        if (request.submitter && currentUserName) {
+          if (request.submitter.toLowerCase().trim() === currentUserName.toLowerCase().trim()) {
+            console.log(`[LiveMeet+ Filtering] Excluding request initiated by current user: ${request.title}`);
+            return false; // Initiator should NOT see their own request
+          }
+        }
+        
+        // Check if current user ID is in targetParticipantIds array
+        if (request.targetParticipantIds && Array.isArray(request.targetParticipantIds)) {
+          if (request.targetParticipantIds.includes(currentUserId)) {
+            return true;
+          }
+        }
+        
+        // Fallback: Check by name if ID matching doesn't work
+        if (request.targetParticipants && Array.isArray(request.targetParticipants)) {
+          const nameMatch = request.targetParticipants.some((name: string) => 
+            name.toLowerCase().trim() === currentUserName?.toLowerCase().trim()
+          );
+          if (nameMatch) {
+            return true;
+          }
+        }
+        
+        return false;
+      });
+      
+      console.log(`[LiveMeet+ Filtering] User: ${currentUserName} | Total requests: ${allRequests.length} | Filtered: ${filteredRequests.length}`);
+      
+      // Batch state updates - stats first, then requests
+      const requestCount = filteredRequests.length;
+      setStats(prev => ({ ...prev, liveMeetingRequests: requestCount }));
+      setLiveMeetRequests(filteredRequests);
+    } catch (error) {
+      console.error('[LiveMeet+ Filtering] Error loading requests:', error);
+      // Batch state updates on error
       setStats(prev => ({ ...prev, liveMeetingRequests: 0 }));
-      return;
+      setLiveMeetRequests([]);
     }
-    
-    // Get current user information
-    const currentUserId = user.id;
-    const currentUserName = user.name;
-    const currentUserRole = user.role;
-    
-    // ⭐ FILTER: Show only requests where current user is a target participant (NOT the initiator)
-    const filteredRequests = allRequests.filter((request: any) => {
-      // First, check if user is the initiator - if so, EXCLUDE this request
-      if (request.submitter && currentUserName) {
-        if (request.submitter.toLowerCase().trim() === currentUserName.toLowerCase().trim()) {
-          console.log(`[LiveMeet+ Filtering] Excluding request initiated by current user: ${request.title}`);
-          return false; // Initiator should NOT see their own request
-        }
-      }
-      
-      // Check if current user ID is in targetParticipantIds array
-      if (request.targetParticipantIds && Array.isArray(request.targetParticipantIds)) {
-        if (request.targetParticipantIds.includes(currentUserId)) {
-          return true;
-        }
-      }
-      
-      // Fallback: Check by name if ID matching doesn't work
-      if (request.targetParticipants && Array.isArray(request.targetParticipants)) {
-        const nameMatch = request.targetParticipants.some((name: string) => 
-          name.toLowerCase().trim() === currentUserName?.toLowerCase().trim()
-        );
-        if (nameMatch) {
-          return true;
-        }
-      }
-      
-      return false;
-    });
-    
-    console.log(`[LiveMeet+ Filtering] User: ${currentUserName} | Total requests: ${allRequests.length} | Filtered: ${filteredRequests.length}`);
-    
-    // Update state with filtered requests only
-    setLiveMeetRequests(filteredRequests);
-    setStats(prev => ({ ...prev, liveMeetingRequests: filteredRequests.length }));
   }, [user]);
 
   // Instant initialization effect
   useEffect(() => {
     if (!user) return;
 
-    // Immediate data setup for instant loading
-    Object.entries(messagesData).forEach(([key, data]) => {
-      localStorage.setItem(key, JSON.stringify(data));
-    });
+    try {
+      // Immediate data setup for instant loading
+      Object.entries(messagesData).forEach(([key, data]) => {
+        try {
+          localStorage.setItem(key, JSON.stringify(data));
+        } catch (error) {
+          console.error(`[Messages] Error saving ${key} to localStorage:`, error);
+        }
+      });
+    } catch (error) {
+      console.error('[Messages] Error initializing localStorage:', error);
+    }
     
     loadLiveMeetRequests();
     setIsInitialized(true);
@@ -197,7 +236,7 @@ const Messages = () => {
       window.removeEventListener('storage', handleStorageChange);
       window.removeEventListener('document-removed', handleDocumentRemoval);
     };
-  }, [user, messagesData, updateMessageCounts, loadLiveMeetRequests]);
+  }, [user, loadLiveMeetRequests, updateMessageCounts]);
 
   const handleLogout = () => {
     logout();
