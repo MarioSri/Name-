@@ -46,7 +46,12 @@ export const NotificationCenter: React.FC = () => {
 
   const getNotificationIcon = (type: string) => {
     switch (type) {
-      case 'meeting': return <Video className="w-4 h-4 text-orange-600" />;
+      case 'meeting': return (
+        <div className="relative w-4 h-4">
+          <div className="absolute inset-0 w-4 h-4 bg-green-400 rounded-full"></div>
+          <div className="absolute inset-1 w-2 h-2 bg-red-500 rounded-full"></div>
+        </div>
+      );
       case 'approval': return <CircleCheck className="w-4 h-4 text-success" />;
       case 'submission': return <FileText className="w-4 h-4 text-primary" />;
       case 'reminder': return <Calendar className="w-4 h-4 text-info" />;
@@ -85,14 +90,9 @@ export const NotificationCenter: React.FC = () => {
           <div className="flex flex-col space-y-1.5 p-6 pb-3">
             <div className="flex items-center justify-between">
               <h3 className="font-semibold tracking-tight text-lg">Notifications</h3>
-              <div className="flex items-center gap-2">
-                <Button variant="ghost" size="icon">
-                  <Settings className="w-4 h-4" />
-                </Button>
-                <Button variant="ghost" size="sm" onClick={markAllRead}>
-                  Mark all read
-                </Button>
-              </div>
+              <Button variant="ghost" size="sm" onClick={markAllRead}>
+                Mark all read
+              </Button>
             </div>
             <div className="flex items-center justify-between text-sm text-muted-foreground">
               <span>{notifications.length} total notifications</span>

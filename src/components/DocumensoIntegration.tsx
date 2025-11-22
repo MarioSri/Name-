@@ -2262,31 +2262,7 @@ export const DocumensoIntegration: React.FC<DocumensoIntegrationProps> = ({
               </CardContent>
             </Card>
 
-            {/* Verification Code Card */}
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <Lock className="w-5 h-5" />
-                  Verification Code
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="space-y-3">
-                  <Label htmlFor="verification-code">Enter 6-Digit Code</Label>
-                  <Input
-                    id="verification-code"
-                    placeholder="000000"
-                    value={verificationCode}
-                    onChange={(e) => setVerificationCode(e.target.value)}
-                    maxLength={6}
-                    className="text-center text-lg tracking-widest"
-                  />
-                  <p className="text-xs text-muted-foreground">
-                    Code sent to {user.email}
-                  </p>
-                </div>
-              </CardContent>
-            </Card>
+
 
             {/* Processing/Completed States */}
             {isProcessing ? (
@@ -2331,11 +2307,11 @@ export const DocumensoIntegration: React.FC<DocumensoIntegrationProps> = ({
                   Back
                 </Button>
                 <Button 
-                  onClick={handleVerification} 
-                  disabled={verificationCode.length !== 6 || !faceVerified}
+                  onClick={handleSign} 
+                  disabled={!faceVerified}
                   className={faceVerified ? 'bg-green-600 hover:bg-green-700' : ''}
                 >
-                  {faceVerified ? '✓ Complete Signing' : '🔒 Verify Face First'}
+                  {faceVerified ? '✓ Complete Signing' : 'Verify'}
                 </Button>
               </div>
             )}

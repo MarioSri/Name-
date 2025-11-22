@@ -681,19 +681,39 @@ export function MeetingScheduler({ userRole, className }: MeetingSchedulerProps)
   };
 
   const handleJoinMeeting = (meeting: Meeting) => {
-    const platform = meeting.meetingLinks?.primary || 'google-meet';
+    const links = meeting.meetingLinks;
     
-    if (platform === 'google-meet') {
-      window.open('https://meet.google.com/new', '_blank');
-    } else if (platform === 'zoom') {
-      window.open('https://zoom.us/start/webmeeting', '_blank');
+    // Try to join using the stored meeting link
+    if (links?.googleMeet?.joinUrl) {
+      window.open(links.googleMeet.joinUrl, '_blank');
+      toast({
+        title: "Joining Meeting",
+        description: "Opening Google Meet...",
+        variant: "default"
+      });
+    } else if (links?.zoom?.joinUrl) {
+      window.open(links.zoom.joinUrl, '_blank');
+      toast({
+        title: "Joining Meeting",
+        description: "Opening Zoom meeting...",
+        variant: "default"
+      });
+    } else if (links?.teams?.joinUrl) {
+      window.open(links.teams.joinUrl, '_blank');
+      toast({
+        title: "Joining Meeting",
+        description: "Opening Microsoft Teams...",
+        variant: "default"
+      });
+    } else {
+      // No meeting link available
+      toast({
+        title: "No Meeting Link",
+        description: "This meeting doesn't have a video conferencing link yet. Please contact the organizer.",
+        variant: "destructive"
+      });
+      console.warn('No meeting link available for:', meeting.title);
     }
-    
-    toast({
-      title: "Joining Meeting",
-      description: `Opening ${platform} meeting...`,
-      variant: "default"
-    });
   };
 
   const handleViewDetails = (meeting: Meeting) => {

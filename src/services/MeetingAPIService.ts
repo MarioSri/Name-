@@ -70,44 +70,163 @@ export class MeetingAPIService {
 
   async createGoogleMeetEvent(meeting: Partial<Meeting>): Promise<GoogleMeetInfo> {
     try {
-      // Generate a new Google Meet link using the official endpoint
-      const meetingId = `meet-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-      const joinUrl = 'https://meet.google.com/new';
+      // Check if user is authenticated with Google
+      const isSignedIn = window.gapi?.auth2?.getAuthInstance()?.isSignedIn?.get();
       
+      if (!isSignedIn) {
+        console.warn('User not signed in to Google. Attempting to sign in...');
+        try {
+          await window.gapi.auth2.getAuthInstance().signIn();
+        } catch (authError) {
+          console.error('Google authentication failed:', authError);
+          throw new Error('Google authentication required. Please sign in with your Google account.');
+        }
+      }
+
+      // Create a calendar event with Google Meet conference
+      const startDateTime = this.formatISODateTime(meeting.date!, meeting.time!);
+      const endDateTime = this.formatISODateTime(meeting.date!, meeting.time!, meeting.duration || 60);
+
+      const event = {
+        summary: meeting.title || 'Meeting',
+        description: meeting.description || '',
+        start: {
+          dateTime: startDateTime,
+          timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone
+        },
+        end: {
+          dateTime: endDateTime,
+          timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone
+        },
+        attendees: meeting.attendees?.map(attendee => ({
+          email: attendee.email,
+          displayName: attendee.name,
+          responseStatus: 'needsAction'
+        })) || [],
+        conferenceData: {
+          createRequest: {
+            requestId: `meet-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+            conferenceSolutionKey: {
+              type: 'hangoutsMeet'
+            }
+          }
+        },
+        reminders: {
+          useDefault: false,
+          overrides: [
+            { method: 'email', minutes: 24 * 60 },
+            { method: 'popup', minutes: 10 }
+          ]
+        }
+      };
+
+      // Insert event with conference data
+      const response = await window.gapi.client.calendar.events.insert({
+        calendarId: 'primary',
+        conferenceDataVersion: 1,
+        sendUpdates: 'all',
+        resource: event
+      });
+
+      if (!response.result) {
+        throw new Error('Failed to create Google Calendar event');
+      }
+
+      const conferenceData = response.result.conferenceData;
+      const meetingLink = conferenceData?.entryPoints?.find((ep: any) => ep.entryPointType === 'video')?.uri || 
+                         response.result.hangoutLink || 
+                         'https://meet.google.com/new';
+
       return {
-        meetingId,
-        joinUrl,
-        hangoutLink: joinUrl,
-        conferenceId: meetingId,
-        requestId: meetingId,
+        meetingId: response.result.id || `meet-${Date.now()}`,
+        joinUrl: meetingLink,
+        hangoutLink: meetingLink,
+        conferenceId: conferenceData?.conferenceId || `conf-${Date.now()}`,
+        requestId: conferenceData?.createRequest?.requestId || event.conferenceData.createRequest.requestId,
         status: 'success',
         createdAt: new Date()
       };
-    } catch (error) {
+    } catch (error: any) {
       console.error('Google Meet creation failed:', error);
-      throw new Error('Failed to create Google Meet event');
+      
+      // If API call fails, provide helpful error message
+      if (error.message?.includes('authentication')) {
+        throw new Error('Google authentication required. Please sign in with your Google account.');
+      } else if (error.result?.error?.message) {
+        throw new Error(`Google Calendar API error: ${error.result.error.message}`);
+      } else {
+        throw new Error('Failed to create Google Meet event. Please check your internet connection and try again.');
+      }
     }
   }
 
   // Zoom API Integration
   async createZoomMeeting(meeting: Partial<Meeting>): Promise<ZoomMeetingInfo> {
     try {
-      // Use the Zoom meeting start URL for instant meetings
-      const meetingId = `zoom-${Date.now()}`;
-      const joinUrl = 'https://zoom.us/start/webmeeting';
+      // Get Zoom access token
+      const accessToken = await this.getZoomAccessToken();
       
+      // Calculate meeting start time
+      const startDateTime = this.formatISODateTime(meeting.date!, meeting.time!);
+
+      // Create meeting via Zoom API
+      const meetingData = {
+        topic: meeting.title || 'Meeting',
+        type: 2, // Scheduled meeting
+        start_time: startDateTime,
+        duration: meeting.duration || 60,
+        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+        agenda: meeting.description || '',
+        settings: {
+          host_video: true,
+          participant_video: true,
+          join_before_host: true,
+          mute_upon_entry: false,
+          watermark: false,
+          use_pmi: false,
+          approval_type: 2, // No registration required
+          audio: 'both',
+          auto_recording: 'none',
+          waiting_room: false
+        }
+      };
+
+      const response = await fetch('https://api.zoom.us/v2/users/me/meetings', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${accessToken}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(meetingData)
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(`Zoom API error: ${errorData.message || response.statusText}`);
+      }
+
+      const zoomMeeting = await response.json();
+
       return {
-        meetingId,
-        joinUrl,
-        startUrl: joinUrl,
-        password: '',
-        meetingNumber: meetingId,
+        meetingId: zoomMeeting.id.toString(),
+        joinUrl: zoomMeeting.join_url,
+        startUrl: zoomMeeting.start_url,
+        password: zoomMeeting.password || '',
+        meetingNumber: zoomMeeting.id.toString(),
         status: 'waiting',
         createdAt: new Date()
       };
-    } catch (error) {
+    } catch (error: any) {
       console.error('Zoom meeting creation failed:', error);
-      throw new Error('Failed to create Zoom meeting');
+      
+      // Provide helpful error messages
+      if (error.message?.includes('access token')) {
+        throw new Error('Zoom authentication failed. Please check your credentials.');
+      } else if (error.message?.includes('Zoom API error')) {
+        throw error;
+      } else {
+        throw new Error('Failed to create Zoom meeting. Please check your internet connection and try again.');
+      }
     }
   }
 

@@ -2104,7 +2104,7 @@ const Approvals = () => {
         <Tabs defaultValue="pending" className="space-y-6">
           <TabsList className="grid w-full grid-cols-3">
             <TabsTrigger value="pending">Pending Approvals</TabsTrigger>
-            <TabsTrigger value="signature">Advanced Signature</TabsTrigger>
+            <TabsTrigger value="signature" disabled>Advanced Signature</TabsTrigger>
             <TabsTrigger value="history">Approval History</TabsTrigger>
           </TabsList>
           
