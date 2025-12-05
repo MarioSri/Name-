@@ -1634,8 +1634,10 @@ const Approvals = () => {
       const originalUser = user;
       (window as any).testUser = mockUser;
       
-      const result = testCase.recipientIds.some((recipientId: string) => {
-        const recipientLower = recipientId.toLowerCase();
+      const result = testCase.recipientIds.some((recipientId: any) => {
+        const recipientStr = typeof recipientId === 'string' ? recipientId : (recipientId?.recipient_user_id || recipientId?.recipient_name || '');
+        if (!recipientStr) return false;
+        const recipientLower = recipientStr.toLowerCase();
         const userRoleLower = mockUser.role.toLowerCase();
         
         const roleMatches = [
@@ -1672,17 +1674,27 @@ const Approvals = () => {
     
     console.log(`🔍 Checking card "${doc.title}" for user: ${currentUserName} (${currentUserRole}) [${currentUserId}]`);
     
+    // Helper to safely extract string from recipient (handles both string and object)
+    const getRecipientString = (r: any): string => {
+      if (typeof r === 'string') return r;
+      if (r && typeof r === 'object') return r.recipient_name || r.recipient_user_id || r.name || r.userId || '';
+      return '';
+    };
+    
     // Check recipientIds first (most reliable)
     if (doc.recipientIds && doc.recipientIds.length > 0) {
       console.log('📋 Checking recipientIds:', doc.recipientIds);
       
-      const matchesRecipientId = doc.recipientIds.some((recipientId: string) => {
-        const recipientLower = recipientId.toLowerCase();
+      const matchesRecipientId = doc.recipientIds.some((recipientId: any) => {
+        const recipientStr = getRecipientString(recipientId);
+        if (!recipientStr) return false;
+        
+        const recipientLower = recipientStr.toLowerCase();
         const userRoleLower = currentUserRole.toLowerCase();
         
         // ✅ Check UUID match first (for Supabase recipients)
-        if (recipientId === currentUserId) {
-          console.log(`  "${recipientId}" -> UUID MATCH`);
+        if (recipientStr === currentUserId) {
+          console.log(`  "${recipientStr}" -> UUID MATCH`);
           return true;
         }
         
@@ -1695,7 +1707,7 @@ const Approvals = () => {
                        recipientLower.includes('program head') && userRoleLower === 'program-head' ||
                        recipientLower.includes('dean') && userRoleLower === 'dean';
         
-        console.log(`  "${recipientId}" -> ${isMatch ? 'MATCH' : 'NO MATCH'}`);
+        console.log(`  "${recipientStr}" -> ${isMatch ? 'MATCH' : 'NO MATCH'}`);
         return isMatch;
       });
       
@@ -1709,13 +1721,16 @@ const Approvals = () => {
     if (doc.recipients && doc.recipients.length > 0) {
       console.log('📋 Checking recipients:', doc.recipients);
       
-      const matchesDisplayName = doc.recipients.some((recipient: string) => {
-        const recipientLower = recipient.toLowerCase();
+      const matchesDisplayName = doc.recipients.some((recipient: any) => {
+        const recipientStr = getRecipientString(recipient);
+        if (!recipientStr) return false;
+        
+        const recipientLower = recipientStr.toLowerCase();
         const userNameLower = currentUserName.toLowerCase();
         const userRoleLower = currentUserRole.toLowerCase();
         
         // Enhanced matching for names and roles including employee
-        const isMatch = recipient.includes(currentUserName) ||
+        const isMatch = recipientStr.includes(currentUserName) ||
                        userNameLower && recipientLower.includes(userNameLower) ||
                        recipientLower.includes(userRoleLower) ||
                        recipientLower.includes('principal') && userRoleLower === 'principal' ||
@@ -1789,8 +1804,10 @@ const Approvals = () => {
       const currentUserName = (user.name || '').toLowerCase().replace(/\s+/g, '-');
       
       // Find current user's position in recipients array
-      const userIndex = doc.recipientIds.findIndex((recipientId: string) => {
-        const recipientLower = recipientId.toLowerCase();
+      const userIndex = doc.recipientIds.findIndex((recipientId: any) => {
+        const recipientStr = typeof recipientId === 'string' ? recipientId : (recipientId?.recipient_user_id || recipientId?.recipient_name || '');
+        if (!recipientStr) return false;
+        const recipientLower = recipientStr.toLowerCase();
         return (currentUserRole && recipientLower.includes(currentUserRole)) || 
                (currentUserName && recipientLower.includes(currentUserName));
       });
@@ -1827,8 +1844,10 @@ const Approvals = () => {
       const currentUserName = (user.name || '').toLowerCase().replace(/\s+/g, '-');
       
       // Find current user's position in recipients array
-      const userIndex = doc.recipientIds.findIndex((recipientId: string) => {
-        const recipientLower = recipientId.toLowerCase();
+      const userIndex = doc.recipientIds.findIndex((recipientId: any) => {
+        const recipientStr = typeof recipientId === 'string' ? recipientId : (recipientId?.recipient_user_id || recipientId?.recipient_name || '');
+        if (!recipientStr) return false;
+        const recipientLower = recipientStr.toLowerCase();
         return recipientLower.includes(currentUserRole) || recipientLower.includes(currentUserName);
       });
       

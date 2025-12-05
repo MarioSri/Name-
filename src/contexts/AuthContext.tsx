@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import { supabase } from '@/lib/supabase';
 import { supabaseWorkflowService } from '@/services/SupabaseWorkflowService';
 
 export interface User {
@@ -9,6 +10,7 @@ export interface User {
   department?: string;
   branch?: string;
   avatar?: string;
+  google_id?: string;
   permissions: {
     canApprove: boolean;
     canViewAllDepartments: boolean;
@@ -23,7 +25,10 @@ interface AuthContextType {
   isAuthenticated: boolean;
   isLoading: boolean;
   login: (role: string) => Promise<void>;
+  loginWithGoogle: () => Promise<void>;
+  loginWithEmail: (email: string) => Promise<void>;
   logout: () => void;
+  syncUserWithSupabase: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -105,18 +110,110 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     }
     return null;
   });
-  const [isLoading, setIsLoading] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
 
   const isAuthenticated = !!user;
 
+  // Sync user data with Supabase recipient
+  const syncUserWithSupabase = async (): Promise<void> => {
+    if (!user) return;
+    
+    try {
+      const recipient = await supabaseWorkflowService.getRecipientById(user.email);
+      if (recipient) {
+        const updatedUser: User = {
+          id: recipient.user_id,
+          name: recipient.name,
+          email: recipient.email,
+          role: (recipient.role_type?.toLowerCase().replace(' ', '-') || 'employee') as User['role'],
+          department: recipient.department,
+          branch: recipient.branch,
+          avatar: recipient.avatar || user.avatar,
+          google_id: recipient.google_id,
+          permissions: getUserPermissions(recipient.role_type?.toLowerCase().replace(' ', '-') || 'employee')
+        };
+        setUser(updatedUser);
+        sessionStorage.setItem('iaoms-user', JSON.stringify(updatedUser));
+        console.log('✅ User synced with Supabase:', updatedUser.name);
+      }
+    } catch (error) {
+      console.error('Failed to sync user with Supabase:', error);
+    }
+  };
 
+  // Login with Google OAuth
+  const loginWithGoogle = async (): Promise<void> => {
+    setIsLoading(true);
+    
+    try {
+      const { data, error } = await supabase.auth.signInWithOAuth({
+        provider: 'google',
+        options: {
+          redirectTo: window.location.origin + '/dashboard',
+          queryParams: {
+            access_type: 'offline',
+            prompt: 'consent',
+          },
+        },
+      });
+
+      if (error) throw error;
+      console.log('✅ Google OAuth initiated');
+    } catch (error) {
+      console.error('Google login failed:', error);
+      setIsLoading(false);
+      throw error;
+    }
+  };
+
+  // Login with email (finds existing recipient in Supabase)
+  const loginWithEmail = async (email: string): Promise<void> => {
+    setIsLoading(true);
+    
+    try {
+      // Find recipient by email in Supabase
+      const recipient = await supabaseWorkflowService.getRecipientById(email);
+      
+      if (!recipient) {
+        throw new Error(`No institutional user found with email: ${email}. Please contact admin.`);
+      }
+      
+      // Create user object from Supabase recipient data
+      const roleKey = recipient.role_type?.toLowerCase().replace(' ', '-') || 'employee';
+      const authenticatedUser: User = {
+        id: recipient.user_id,
+        name: recipient.name,
+        email: recipient.email,
+        role: roleKey as User['role'],
+        department: recipient.department,
+        branch: recipient.branch,
+        avatar: recipient.avatar,
+        google_id: recipient.google_id,
+        permissions: getUserPermissions(roleKey)
+      };
+
+      console.log('✅ [AuthContext] User authenticated via email:', {
+        id: authenticatedUser.id,
+        name: authenticatedUser.name,
+        role: authenticatedUser.role
+      });
+
+      setUser(authenticatedUser);
+      sessionStorage.setItem('iaoms-user', JSON.stringify(authenticatedUser));
+      
+    } catch (error) {
+      console.error('Email login failed:', error);
+      throw error;
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // Login with role (demo/development mode)
   const login = async (role: string): Promise<void> => {
     setIsLoading(true);
     
     try {
-      // Simulate authentication delay
-      await new Promise(resolve => setTimeout(resolve, 1500));
-      
       // Get all recipients from Supabase and find one matching the role
       const recipients = await supabaseWorkflowService.getRecipients();
       
@@ -139,7 +236,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       );
       
       if (!recipient) {
-        throw new Error(`No user found with role: ${role}`);
+        throw new Error(`No user found with role: ${role}. Please seed the database first.`);
       }
       
       // Create user object from Supabase data
@@ -151,6 +248,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
         department: recipient.department,
         branch: recipient.branch,
         avatar: recipient.avatar,
+        google_id: recipient.google_id,
         permissions: getUserPermissions(role)
       };
 
@@ -161,16 +259,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       });
 
       setUser(authenticatedUser);
-      
-      // Store in sessionStorage for persistence during browser session only
       sessionStorage.setItem('iaoms-user', JSON.stringify(authenticatedUser));
-      
-      // Check if this is the first login for tutorial
-      const hasLoggedInBefore = localStorage.getItem('hasLoggedInBefore');
-      if (!hasLoggedInBefore) {
-        localStorage.setItem('isFirstLogin', 'true');
-        localStorage.setItem('hasLoggedInBefore', 'true');
-      }
       
     } catch (error) {
       console.error('Login failed:', error);
@@ -180,14 +269,92 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     }
   };
 
-  const logout = () => {
+  const logout = async () => {
+    try {
+      // Sign out from Supabase auth if using Google OAuth
+      await supabase.auth.signOut();
+    } catch (error) {
+      console.error('Supabase signout error:', error);
+    }
+    
     setUser(null);
-    setIsLoading(false); // Ensure loading state is reset
+    setIsLoading(false);
     sessionStorage.removeItem('iaoms-user');
-    // Clear any cached data that might persist
     sessionStorage.clear();
-    // Navigation will be handled by individual components
   };
+
+  // Listen for Supabase auth state changes (Google OAuth callback)
+  useEffect(() => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+      console.log('🔐 Auth state changed:', event);
+      
+      if (event === 'SIGNED_IN' && session?.user) {
+        const googleUser = session.user;
+        
+        try {
+          // Check if user exists in recipients table
+          let recipient = await supabaseWorkflowService.getRecipientById(googleUser.email || '');
+          
+          if (!recipient) {
+            // Create new recipient for this Google user (default to employee)
+            console.log('📝 Creating new recipient for Google user:', googleUser.email);
+            recipient = await supabaseWorkflowService.createRecipient({
+              user_id: googleUser.id,
+              google_id: googleUser.id,
+              name: googleUser.user_metadata?.full_name || googleUser.email?.split('@')[0] || 'User',
+              email: googleUser.email || '',
+              role: 'EMPLOYEE',
+              role_type: 'EMPLOYEE',
+              avatar: googleUser.user_metadata?.avatar_url,
+            });
+          } else {
+            // Update google_id if not set
+            if (!recipient.google_id) {
+              await supabaseWorkflowService.updateRecipient(recipient.email, {
+                google_id: googleUser.id,
+                avatar: recipient.avatar || googleUser.user_metadata?.avatar_url,
+              });
+            }
+          }
+          
+          // Create authenticated user
+          const roleKey = recipient.role_type?.toLowerCase().replace(' ', '-') || 'employee';
+          const authenticatedUser: User = {
+            id: recipient.user_id,
+            name: recipient.name,
+            email: recipient.email,
+            role: roleKey as User['role'],
+            department: recipient.department,
+            branch: recipient.branch,
+            avatar: recipient.avatar || googleUser.user_metadata?.avatar_url,
+            google_id: googleUser.id,
+            permissions: getUserPermissions(roleKey)
+          };
+          
+          setUser(authenticatedUser);
+          sessionStorage.setItem('iaoms-user', JSON.stringify(authenticatedUser));
+          console.log('✅ Google user authenticated:', authenticatedUser.name);
+          
+        } catch (error) {
+          console.error('Failed to process Google login:', error);
+        }
+      } else if (event === 'SIGNED_OUT') {
+        setUser(null);
+        sessionStorage.removeItem('iaoms-user');
+      }
+      
+      setIsLoading(false);
+    });
+
+    // Check initial session
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (!session && !sessionStorage.getItem('iaoms-user')) {
+        setIsLoading(false);
+      }
+    });
+
+    return () => subscription.unsubscribe();
+  }, []);
 
   // Clean up any old localStorage sessions on mount
   useEffect(() => {
@@ -200,7 +367,10 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       isAuthenticated,
       isLoading,
       login,
-      logout
+      loginWithGoogle,
+      loginWithEmail,
+      logout,
+      syncUserWithSupabase
     }}>
       {children}
     </AuthContext.Provider>

@@ -7,6 +7,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { useSupabaseRealTimeDocuments } from "@/hooks/useSupabaseRealTimeDocuments";
 import { ExternalNotificationDispatcher } from "@/services/ExternalNotificationDispatcher";
 import { channelAutoCreationService } from "@/services/ChannelAutoCreationService";
+import { getRecipientName } from "@/utils/recipientUtils";
 
 const Documents = () => {
   const { user, logout } = useAuth();
@@ -31,6 +32,7 @@ const Documents = () => {
 
   const handleDocumentSubmit = async (data: any) => {
     console.log("Document submitted:", data);
+    console.log("🔌 Supabase connected:", supabaseConnected);
     
     // Load user profile from Personal Information
     const userProfile = JSON.parse(localStorage.getItem('user-profile') || '{}');
@@ -45,7 +47,7 @@ const Documents = () => {
       role: user?.role
     });
     
-    // Convert files to base64 for localStorage storage
+    // Convert files to base64 for storage
     const convertFilesToBase64 = async (files: File[]) => {
       const filePromises = files.map(file => {
         return new Promise((resolve) => {
@@ -69,88 +71,6 @@ const Documents = () => {
       ? await convertFilesToBase64(data.files)
       : [];
     
-    // Map recipient IDs to names for workflow steps
-    const getRecipientName = (recipientId: string) => {
-      // Map of common recipient IDs to their display names
-      const recipientMap: { [key: string]: string } = {
-        // Leadership
-        'principal-dr.-robert-principal': 'Dr. Robert Principal',
-        'registrar-prof.-sarah-registrar': 'Prof. Sarah Registrar',
-        'dean-dr.-maria-dean': 'Dr. Maria Dean',
-        'chairman-mr.-david-chairman': 'Mr. David Chairman',
-        'director-(for-information)-ms.-lisa-director': 'Ms. Lisa Director',
-        'leadership-prof.-leadership-officer': 'Prof. Leadership Officer',
-        
-        // CDC Employees
-        'cdc-head-dr.-cdc-head': 'Dr. CDC Head',
-        'cdc-coordinator-prof.-cdc-coordinator': 'Prof. CDC Coordinator',
-        'cdc-executive-ms.-cdc-executive': 'Ms. CDC Executive',
-        
-        // Administrative
-        'controller-of-examinations-dr.-robert-controller': 'Dr. Robert Controller',
-        'asst.-dean-iiic-prof.-asst-dean': 'Prof. Asst Dean',
-        'head-operations-mr.-michael-operations': 'Mr. Michael Operations',
-        'librarian-ms.-jennifer-librarian': 'Ms. Jennifer Librarian',
-        'ssg-prof.-william-ssg': 'Prof. William SSG',
-        
-        // HODs
-        'hod-dr.-eee-hod-eee': 'Dr. EEE HOD',
-        'hod-dr.-mech-hod-mech': 'Dr. MECH HOD',
-        'hod-dr.-cse-hod-cse': 'Dr. CSE HOD',
-        'hod-dr.-ece-hod-ece': 'Dr. ECE HOD',
-        'hod-dr.-csm-hod-csm': 'Dr. CSM HOD',
-        'hod-dr.-cso-hod-cso': 'Dr. CSO HOD',
-        'hod-dr.-csd-hod-csd': 'Dr. CSD HOD',
-        'hod-dr.-csc-hod-csc': 'Dr. CSC HOD',
-        
-        // Program Department Heads
-        'program-department-head-prof.-eee-head-eee': 'Prof. EEE Head',
-        'program-department-head-prof.-mech-head-mech': 'Prof. MECH Head',
-        'program-department-head-prof.-cse-head-cse': 'Prof. CSE Head',
-        'program-department-head-prof.-ece-head-ece': 'Prof. ECE Head',
-        'program-department-head-prof.-csm-head-csm': 'Prof. CSM Head',
-        'program-department-head-prof.-cso-head-cso': 'Prof. CSO Head',
-        'program-department-head-prof.-csd-head-csd': 'Prof. CSD Head',
-        'program-department-head-prof.-csc-head-csc': 'Prof. CSC Head'
-      };
-      
-      // If we have a mapping, use it
-      if (recipientMap[recipientId]) {
-        return recipientMap[recipientId];
-      }
-      
-      // Otherwise, try to extract the name from the ID
-      // IDs are typically formatted like: 'role-name-branch-year'
-      // e.g., 'faculty-dr.-cse-faculty-cse-1st'
-      const parts = recipientId.split('-');
-      
-      // Try to find name pattern (usually contains Dr., Prof., Mr., Ms., etc.)
-      let name = '';
-      for (let i = 0; i < parts.length; i++) {
-        if (parts[i].match(/^(dr\.|prof\.|mr\.|ms\.|dr|prof|mr|ms)$/i)) {
-          // Found a title, collect the name parts
-          const titleIndex = i;
-          name = parts.slice(titleIndex).join(' ');
-          // Clean up and capitalize
-          name = name.replace(/-/g, ' ')
-                    .split(' ')
-                    .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
-                    .join(' ');
-          break;
-        }
-      }
-      
-      // If we couldn't extract a proper name, use the whole ID cleaned up
-      if (!name) {
-        name = recipientId.replace(/-/g, ' ')
-                      .split(' ')
-                      .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
-                      .join(' ');
-      }
-      
-      return name;
-    };
-    
     // Create workflow steps based on selected recipients
     const workflowSteps = [
       { name: 'Submission', status: 'completed', assignee: currentUserName, completedDate: new Date().toISOString().split('T')[0] }
@@ -173,17 +93,153 @@ const Documents = () => {
         completedDate: ''
       });
     });
+
+    // Generate common IDs
+    const trackingId = `DOC-${Date.now()}`;
+    const recipientNames = data.recipients.map((id: string) => getRecipientName(id));
+
+    // ========================================
+    // SUPABASE PATH: Use Supabase when connected
+    // ========================================
+    if (supabaseConnected) {
+      console.log('🚀 Using Supabase for document submission');
+      
+      try {
+        // Submit to Supabase - this creates both document and approval cards
+        const supabaseDoc = await submitToSupabase({
+          trackingId: trackingId,
+          title: data.title,
+          description: data.description,
+          type: data.documentTypes[0]?.charAt(0).toUpperCase() + data.documentTypes[0]?.slice(1) || 'Document',
+          priority: data.priority,
+          recipients: recipientNames,
+          recipientIds: data.recipients,
+          routingType: 'sequential',
+          isEmergency: false,
+          isParallel: false,
+          source: 'document-management',
+          metadata: {
+            assignments: data.assignments,
+            files: serializedFiles,
+            submittedByDepartment: currentUserDept,
+            submittedByDesignation: currentUserDesignation
+          },
+          workflow: {
+            currentStep: workflowSteps.length > 1 ? workflowSteps[1].name : 'Complete',
+            progress: 0,
+            steps: workflowSteps,
+            recipients: data.recipients
+          }
+        });
+
+        console.log('✅ [Supabase] Document created:', supabaseDoc.id);
+
+        // Also save to localStorage for backward compatibility with other components
+        const trackingCard = {
+          id: supabaseDoc.trackingId || trackingId,
+          title: data.title,
+          type: data.documentTypes[0]?.charAt(0).toUpperCase() + data.documentTypes[0]?.slice(1) || 'Document',
+          submitter: currentUserName,
+          submittedBy: currentUserName,
+          submittedByDepartment: currentUserDept,
+          submittedByDesignation: currentUserDesignation,
+          submittedByRole: user?.role,
+          submittedDate: new Date().toISOString().split('T')[0],
+          status: 'pending',
+          priority: data.priority === 'normal' ? 'Normal Priority' : 
+                   data.priority === 'medium' ? 'Medium Priority' :
+                   data.priority === 'high' ? 'High Priority' : 'Urgent Priority',
+          workflow: {
+            currentStep: workflowSteps.length > 1 ? workflowSteps[1].name : 'Complete',
+            progress: 0,
+            steps: workflowSteps,
+            recipients: data.recipients
+          },
+          requiresSignature: true,
+          signedBy: [],
+          description: data.description,
+          files: serializedFiles,
+          assignments: data.assignments,
+          comments: [],
+          supabaseId: supabaseDoc.id // Link to Supabase record
+        };
+
+        // Save to localStorage for Track Documents page compatibility
+        const existingCards = JSON.parse(localStorage.getItem('submitted-documents') || '[]');
+        existingCards.unshift(trackingCard);
+        localStorage.setItem('submitted-documents', JSON.stringify(existingCards));
+
+        // Create approval card for localStorage (for backward compatibility)
+        const approvalCard = {
+          id: trackingCard.id,
+          title: data.title,
+          type: trackingCard.type,
+          submitter: currentUserName,
+          submittedDate: trackingCard.submittedDate,
+          status: 'pending',
+          priority: data.priority,
+          description: data.description,
+          recipients: recipientNames,
+          recipientIds: data.recipients,
+          files: serializedFiles,
+          trackingCardId: trackingCard.id,
+          isCustomAssignment: false,
+          supabaseId: supabaseDoc.id
+        };
+
+        const existingApprovals = JSON.parse(localStorage.getItem('pending-approvals') || '[]');
+        existingApprovals.unshift(approvalCard);
+        localStorage.setItem('pending-approvals', JSON.stringify(existingApprovals));
+
+        // Dispatch events for real-time UI updates
+        window.dispatchEvent(new CustomEvent('document-approval-created', {
+          detail: { document: trackingCard, approval: approvalCard }
+        }));
+        window.dispatchEvent(new CustomEvent('approval-card-created', {
+          detail: { approval: approvalCard }
+        }));
+        window.dispatchEvent(new CustomEvent('document-submitted', {
+          detail: { trackingCard, approvalCards: [approvalCard] }
+        }));
+
+        // Send notifications
+        await sendNotifications(data.recipients, data.title, currentUserName, data.priority);
+
+        // Auto-create channel
+        createDocumentChannel(trackingCard.id, data.title, currentUserName, data.recipients, recipientNames);
+
+        toast({
+          title: "Document Submitted (Supabase)",
+          description: `Your document has been submitted to ${data.recipients.length} recipient(s) via Supabase real-time sync.`,
+        });
+
+        return;
+      } catch (error) {
+        console.error('❌ Supabase submission failed, falling back to localStorage:', error);
+        toast({
+          title: "Supabase Error",
+          description: "Falling back to local storage. Your document will still be tracked.",
+          variant: "destructive"
+        });
+        // Fall through to localStorage path
+      }
+    }
+
+    // ========================================
+    // LOCALSTORAGE PATH: Fallback when Supabase not connected
+    // ========================================
+    console.log('📦 Using localStorage for document submission');
     
     // Create tracking card data
     const trackingCard = {
-      id: `DOC-${Date.now()}`,
+      id: trackingId,
       title: data.title,
       type: data.documentTypes[0]?.charAt(0).toUpperCase() + data.documentTypes[0]?.slice(1) || 'Document',
-      submitter: currentUserName,  // ✅ Use 'submitter' field for consistency
+      submitter: currentUserName,
       submittedBy: currentUserName,
       submittedByDepartment: currentUserDept,
       submittedByDesignation: currentUserDesignation,
-      submittedByRole: user?.role, // Add role for matching
+      submittedByRole: user?.role,
       submittedDate: new Date().toISOString().split('T')[0],
       status: 'pending',
       priority: data.priority === 'normal' ? 'Normal Priority' : 
@@ -198,7 +254,7 @@ const Documents = () => {
       requiresSignature: true,
       signedBy: [],
       description: data.description,
-      files: serializedFiles, // Store base64 serialized files for preview
+      files: serializedFiles,
       assignments: data.assignments,
       comments: []
     };
@@ -208,32 +264,15 @@ const Documents = () => {
     existingCards.unshift(trackingCard);
     localStorage.setItem('submitted-documents', JSON.stringify(existingCards));
     
-    console.log('✅ [Document Submission] Tracking card created:', {
-      id: trackingCard.id,
-      title: trackingCard.title,
-      submittedBy: trackingCard.submittedBy,
-      submittedByDesignation: trackingCard.submittedByDesignation,
-      submittedByRole: trackingCard.submittedByRole
-    });
+    console.log('✅ [localStorage] Tracking card created:', trackingCard.id);
     
-    // Create approval card(s) for Approval Center
-    console.log('\n' + '='.repeat(80));
-    console.log('📄 CREATING APPROVAL CARDS');
-    console.log('='.repeat(80));
-    console.log('📋 Selected recipient IDs:', data.recipients);
-    console.log('📎 Document assignments:', data.assignments);
-    console.log('👤 Current user:', currentUserName, '(', currentUserDesignation, ')');
-    
+    // Create approval cards
     const existingApprovals = JSON.parse(localStorage.getItem('pending-approvals') || '[]');
     const approvalCards: any[] = [];
     
-    // Check if custom assignments exist and are not empty
     const hasCustomAssignments = data.assignments && Object.keys(data.assignments).length > 0;
     
     if (hasCustomAssignments) {
-      // ENFORCE CUSTOM ASSIGNMENTS: Create separate approval cards per file
-      console.log('✨ Custom assignments detected - creating file-specific approval cards');
-      
       // Group files by their assigned recipients
       const filesByRecipients: { [key: string]: any[] } = {};
       
@@ -247,103 +286,69 @@ const Documents = () => {
         filesByRecipients[recipientKey].push(file);
       });
       
-      // Create one approval card per unique recipient combination
       Object.entries(filesByRecipients).forEach(([recipientKey, files]) => {
         const assignedRecipientIds = recipientKey.split(',');
-        const recipientNames = assignedRecipientIds.map((id: string) => getRecipientName(id));
+        const assignedRecipientNames = assignedRecipientIds.map((id: string) => getRecipientName(id));
         
         const approvalCard = {
           id: `${trackingCard.id}-${assignedRecipientIds.join('-')}`,
           title: files.length === serializedFiles.length ? data.title : `${data.title} (${files.map((f: any) => f.name).join(', ')})`,
-          type: data.documentTypes[0]?.charAt(0).toUpperCase() + data.documentTypes[0]?.slice(1) || 'Document',
+          type: trackingCard.type,
           submitter: currentUserName,
-          submittedDate: new Date().toISOString().split('T')[0],
+          submittedDate: trackingCard.submittedDate,
           status: 'pending',
           priority: data.priority,
           description: data.description,
-          recipients: recipientNames,
+          recipients: assignedRecipientNames,
           recipientIds: assignedRecipientIds,
-          files: files, // Only assigned files
-          trackingCardId: trackingCard.id, // Link to tracking card for sequential flow
+          files: files,
+          trackingCardId: trackingCard.id,
           parentDocId: trackingCard.id,
           isCustomAssignment: true
         };
         
         approvalCards.push(approvalCard);
         existingApprovals.unshift(approvalCard);
-        
-        console.log(`✅ Approval card created for recipients: ${recipientNames.join(', ')}`);
-        console.log(`   📎 Files: ${files.map((f: any) => f.name).join(', ')}`);
       });
     } else {
-      // DEFAULT: All files go to all recipients (backward compatibility)
-      console.log('📋 No custom assignments - creating single approval card for all recipients');
-      
-      const recipientNames = data.recipients.map((id: string) => {
-        const name = getRecipientName(id);
-        console.log(`🔄 Converting recipient ID: ${id} → ${name}`);
-        return name;
-      });
-      
-      console.log('\n✅ All recipient names:', recipientNames);
-      
       const approvalCard = {
         id: trackingCard.id,
         title: data.title,
-        type: data.documentTypes[0]?.charAt(0).toUpperCase() + data.documentTypes[0]?.slice(1) || 'Document',
+        type: trackingCard.type,
         submitter: currentUserName,
-        submittedDate: new Date().toISOString().split('T')[0],
+        submittedDate: trackingCard.submittedDate,
         status: 'pending',
         priority: data.priority,
         description: data.description,
         recipients: recipientNames,
         recipientIds: data.recipients,
         files: serializedFiles,
-        trackingCardId: trackingCard.id, // Link to tracking card for sequential flow
+        trackingCardId: trackingCard.id,
         isCustomAssignment: false
       };
       
       approvalCards.push(approvalCard);
       existingApprovals.unshift(approvalCard);
-      
-      console.log('\n✅ APPROVAL CARD CREATED:');
-      console.log('   ID:', approvalCard.id);
-      console.log('   Title:', approvalCard.title);
-      console.log('   Recipients (names):', approvalCard.recipients);
-      console.log('   Recipient IDs:', approvalCard.recipientIds);
-      console.log('   Total recipients:', approvalCard.recipients.length);
-      console.log('   Files:', approvalCard.files?.length || 0);
     }
     
-    // Save all approval cards to localStorage
+    // Save approval cards
     localStorage.setItem('pending-approvals', JSON.stringify(existingApprovals));
     
-    console.log('\n💾 SAVED TO LOCALSTORAGE:');
-    console.log(`   New cards created: ${approvalCards.length}`);
-    console.log(`   Total cards in storage: ${existingApprovals.length}`);
-    console.log('\n📋 All approval card IDs:', approvalCards.map(c => c.id));
-    console.log('='.repeat(80));
-    
-    // Dispatch events for real-time updates
-    console.log('📢 Dispatching document-approval-created event for tracking');
+    // Dispatch events
     window.dispatchEvent(new CustomEvent('document-approval-created', {
       detail: { document: trackingCard }
     }));
     
-    // Dispatch event for each approval card created
     approvalCards.forEach((card) => {
-      console.log('📢 Dispatching approval-card-created event for:', card.id);
       window.dispatchEvent(new CustomEvent('approval-card-created', {
         detail: { approval: card }
       }));
     });
     
-    // Additional event for immediate UI updates
     window.dispatchEvent(new CustomEvent('document-submitted', {
       detail: { trackingCard, approvalCards }
     }));
     
-    // Force storage event for cross-tab updates
     window.dispatchEvent(new StorageEvent('storage', {
       key: 'submitted-documents',
       newValue: JSON.stringify(existingCards)
@@ -354,20 +359,23 @@ const Documents = () => {
       newValue: JSON.stringify(existingApprovals)
     }));
     
-    console.log('\n✅ SUBMISSION COMPLETE:');
-    console.log('   Tracking Card ID:', trackingCard.id);
-    console.log('   Approval Cards Created:', approvalCards.length);
-    console.log('   Approval Card IDs:', approvalCards.map(c => c.id));
-    console.log('   Total Recipients:', data.recipients.length);
-    console.log('   Events Dispatched: document-approval-created, approval-card-created, document-submitted');
-    console.log('='.repeat(80) + '\n');
+    // Send notifications
+    await sendNotifications(data.recipients, data.title, currentUserName, data.priority);
     
-    // Send notifications to recipients based on their preferences
+    // Auto-create channel
+    createDocumentChannel(trackingCard.id, data.title, currentUserName, data.recipients, recipientNames);
+    
+    toast({
+      title: "Document Submitted",
+      description: `Your document has been submitted to ${data.recipients.length} recipient(s) and is now being tracked.`,
+    });
+  };
+
+  // Helper function to send notifications
+  const sendNotifications = async (recipientIds: string[], title: string, submitter: string, priority: string) => {
     console.log('📬 Sending notifications to recipients...');
-    const allRecipientIds = [...new Set(approvalCards.flatMap(card => card.recipientIds))];
-    const notificationResults: { [key: string]: { success: boolean; channels: string[] } } = {};
     
-    for (const recipientId of allRecipientIds) {
+    for (const recipientId of recipientIds) {
       const recipientName = getRecipientName(recipientId);
       
       try {
@@ -376,61 +384,41 @@ const Documents = () => {
           recipientName,
           {
             type: 'approval',
-            documentTitle: data.title,
-            submitter: currentUserName,
-            priority: data.priority,
+            documentTitle: title,
+            submitter: submitter,
+            priority: priority,
             approvalCenterLink: `${window.location.origin}/approvals`,
             recipientName: recipientName
           }
         );
         
-        notificationResults[recipientId] = result;
-        
         if (result.success) {
           console.log(`✅ Notified ${recipientName} via: ${result.channels.join(', ')}`);
-        } else {
-          console.log(`⚠️ No notifications sent to ${recipientName} (preferences disabled or not found)`);
         }
       } catch (error) {
         console.error(`❌ Error notifying ${recipientName}:`, error);
-        notificationResults[recipientId] = { success: false, channels: [] };
       }
     }
-    
-    const totalNotified = Object.values(notificationResults).filter(r => r.success).length;
-    console.log(`📬 Notification Summary: ${totalNotified} of ${allRecipientIds.length} recipients notified`);
-    
-    // 🆕 AUTO-CREATE CHANNEL using ChannelAutoCreationService
-    console.log('📢 Auto-creating channel for Document Management submission...');
-    
+  };
+
+  // Helper function to create document channel
+  const createDocumentChannel = (docId: string, title: string, submitterName: string, recipientIds: string[], recipientNames: string[]) => {
     try {
-      const recipientNames = data.recipients.map((id: string) => getRecipientName(id));
-      
       const channel = channelAutoCreationService.createDocumentChannel({
-        documentId: trackingCard.id,
-        documentTitle: data.title,
+        documentId: docId,
+        documentTitle: title,
         submittedBy: user?.id || 'unknown',
-        submittedByName: currentUserName,
-        recipients: data.recipients,
+        submittedByName: submitterName,
+        recipients: recipientIds,
         recipientNames: recipientNames,
         source: 'Document Management',
         submittedAt: new Date()
       });
       
-      console.log('✅ Channel auto-created:', {
-        channelId: channel.id,
-        channelName: channel.name,
-        members: channel.members.length,
-        documentId: channel.documentId
-      });
+      console.log('✅ Channel auto-created:', channel.id);
     } catch (error) {
       console.error('❌ Failed to auto-create channel:', error);
     }
-    
-    toast({
-      title: "Document Submitted",
-      description: `Your document has been submitted to ${data.recipients.length} recipient(s) and is now being tracked. A collaboration channel has been created in Department Chat.`,
-    });
   };
 
   return (

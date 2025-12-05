@@ -1,6 +1,7 @@
 /**
  * Real-time recipient management component
  * Handles dynamic recipient updates across all document systems
+ * Uses Supabase for real-time recipient data
  */
 
 import React, { useState, useEffect } from 'react';
@@ -11,12 +12,14 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Checkbox } from '@/components/ui/checkbox';
-import { Users, Plus, Trash2, RefreshCw } from 'lucide-react';
+import { Users, Plus, Trash2, RefreshCw, Loader2 } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { useRealTimeDocuments } from '@/hooks/useRealTimeDocuments';
+import { supabaseStorage } from '@/services/SupabaseStorageService';
 
 interface Recipient {
-  id: string;
+  id: string;          // UUID from Supabase
+  user_id: string;     // user_id field
   name: string;
   role: string;
   department?: string;
@@ -40,83 +43,82 @@ export const RealTimeRecipientManager: React.FC<RealTimeRecipientManagerProps> =
   mode = 'create'
 }) => {
   const { user } = useAuth();
-  const { updateRecipients, loading } = useRealTimeDocuments();
+  const { updateRecipients, loading: updateLoading } = useRealTimeDocuments();
   
   const [availableRecipients, setAvailableRecipients] = useState<Recipient[]>([]);
   const [selectedRecipients, setSelectedRecipients] = useState<Recipient[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [filterRole, setFilterRole] = useState<string>('all');
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
-  // Load available recipients
+  // Load recipients from Supabase
   useEffect(() => {
-    const recipients: Recipient[] = [
-      {
-        id: 'principal-dr.-robert-principal',
-        name: 'Dr. Robert Principal',
-        role: 'principal',
-        department: 'Administration',
-        email: 'principal@university.edu',
-        selected: false
-      },
-      {
-        id: 'registrar-prof.-sarah-registrar',
-        name: 'Prof. Sarah Registrar',
-        role: 'registrar',
-        department: 'Administration',
-        email: 'registrar@university.edu',
-        selected: false
-      },
-      {
-        id: 'dean-dr.-maria-dean',
-        name: 'Dr. Maria Dean',
-        role: 'dean',
-        department: 'Academic Affairs',
-        email: 'dean@university.edu',
-        selected: false
-      },
-      {
-        id: 'hod-dr.-cse-hod',
-        name: 'Dr. CSE HOD',
-        role: 'hod',
-        department: 'Computer Science',
-        email: 'cse.hod@university.edu',
-        selected: false
-      },
-      {
-        id: 'hod-dr.-ece-hod',
-        name: 'Dr. ECE HOD',
-        role: 'hod',
-        department: 'Electronics',
-        email: 'ece.hod@university.edu',
-        selected: false
-      },
-      {
-        id: 'controller-prof.-finance-controller',
-        name: 'Prof. Finance Controller',
-        role: 'controller',
-        department: 'Finance',
-        email: 'controller@university.edu',
-        selected: false
-      },
-      {
-        id: 'program-head-dr.-mba-head',
-        name: 'Dr. MBA Program Head',
-        role: 'program head',
-        department: 'Management',
-        email: 'mba.head@university.edu',
-        selected: false
+    const loadRecipients = async () => {
+      setLoading(true);
+      setError(null);
+      
+      try {
+        const supabaseRecipients = await supabaseStorage.getRecipients();
+        
+        // Map Supabase data to component format
+        const recipients: Recipient[] = supabaseRecipients.map(r => ({
+          id: r.id,              // UUID
+          user_id: r.user_id,    // user_id for matching
+          name: r.name,
+          role: r.role,
+          department: r.department,
+          email: r.email,
+          selected: initialRecipientIds.includes(r.id) || 
+                   initialRecipientIds.includes(r.user_id) || 
+                   initialRecipients.includes(r.name)
+        }));
+
+        setAvailableRecipients(recipients);
+        setSelectedRecipients(recipients.filter(r => r.selected));
+        console.log('✅ Loaded', recipients.length, 'recipients from Supabase');
+      } catch (err) {
+        console.error('❌ Failed to load recipients:', err);
+        setError('Failed to load recipients from database');
+      } finally {
+        setLoading(false);
       }
-    ];
+    };
 
-    // Mark initially selected recipients
-    const updatedRecipients = recipients.map(recipient => ({
-      ...recipient,
-      selected: initialRecipientIds.includes(recipient.id) || initialRecipients.includes(recipient.name)
-    }));
-
-    setAvailableRecipients(updatedRecipients);
-    setSelectedRecipients(updatedRecipients.filter(r => r.selected));
+    loadRecipients();
   }, [initialRecipients, initialRecipientIds]);
+
+  // Subscribe to real-time recipient updates
+  useEffect(() => {
+    const channel = supabaseStorage.subscribeToTable('recipients', (payload) => {
+      console.log('📡 Recipients update:', payload.eventType);
+      
+      if (payload.eventType === 'INSERT') {
+        const newRecipient: Recipient = {
+          id: (payload.new as any).id,
+          user_id: (payload.new as any).user_id,
+          name: (payload.new as any).name,
+          role: (payload.new as any).role,
+          department: (payload.new as any).department,
+          email: (payload.new as any).email,
+          selected: false
+        };
+        setAvailableRecipients(prev => [...prev, newRecipient]);
+      } else if (payload.eventType === 'UPDATE') {
+        setAvailableRecipients(prev => prev.map(r => 
+          r.id === (payload.new as any).id 
+            ? { ...r, ...(payload.new as any), selected: r.selected }
+            : r
+        ));
+      } else if (payload.eventType === 'DELETE') {
+        setAvailableRecipients(prev => prev.filter(r => r.id !== (payload.old as any).id));
+      }
+    });
+
+    return () => {
+      channel?.unsubscribe?.();
+    };
+  }, []);
 
   // Filter recipients based on search and role
   const filteredRecipients = availableRecipients.filter(recipient => {
@@ -124,10 +126,13 @@ export const RealTimeRecipientManager: React.FC<RealTimeRecipientManagerProps> =
                          recipient.role.toLowerCase().includes(searchTerm.toLowerCase()) ||
                          recipient.department?.toLowerCase().includes(searchTerm.toLowerCase());
     
-    const matchesRole = filterRole === 'all' || recipient.role === filterRole;
+    const matchesRole = filterRole === 'all' || recipient.role.toLowerCase() === filterRole.toLowerCase();
     
     return matchesSearch && matchesRole;
   });
+
+  // Get unique roles for filter dropdown
+  const availableRoles = [...new Set(availableRecipients.map(r => r.role))].sort();
 
   // Handle recipient selection
   const handleRecipientToggle = (recipient: Recipient) => {
@@ -140,13 +145,38 @@ export const RealTimeRecipientManager: React.FC<RealTimeRecipientManagerProps> =
     const newSelectedRecipients = updatedRecipients.filter(r => r.selected);
     setSelectedRecipients(newSelectedRecipients);
     
-    // Notify parent component
+    // Notify parent component with user_id for proper Supabase references
     if (onRecipientsChange) {
       const recipients = newSelectedRecipients.map(r => r.name);
-      const recipientIds = newSelectedRecipients.map(r => r.id);
+      const recipientIds = newSelectedRecipients.map(r => r.user_id);
       onRecipientsChange(recipients, recipientIds);
     }
   };
+
+  if (loading) {
+    return (
+      <Card>
+        <CardContent className="flex items-center justify-center py-8">
+          <Loader2 className="h-6 w-6 animate-spin mr-2" />
+          <span>Loading recipients...</span>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  if (error) {
+    return (
+      <Card>
+        <CardContent className="flex items-center justify-center py-8 text-red-500">
+          <span>{error}</span>
+          <Button variant="outline" size="sm" className="ml-4" onClick={() => window.location.reload()}>
+            <RefreshCw className="h-4 w-4 mr-2" />
+            Retry
+          </Button>
+        </CardContent>
+      </Card>
+    );
+  }
 
   // Handle real-time update
   const handleUpdateRecipients = async () => {

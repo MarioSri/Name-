@@ -16,7 +16,9 @@ import { LoadingState } from '@/components/ui/loading-states';
 import { BiDirectionalWorkflowEngine } from '@/services/BiDirectionalWorkflowEngine';
 import { WorkflowRoute, WorkflowStep } from '@/types/workflow';
 import { channelAutoCreationService } from '@/services/ChannelAutoCreationService';
+import { useSupabaseRealTimeDocuments } from '@/hooks/useSupabaseRealTimeDocuments';
 import { cn } from '@/lib/utils';
+import { getRecipientName } from '@/utils/recipientUtils';
 import {
   Settings,
   Plus,
@@ -59,6 +61,7 @@ interface WorkflowConfigurationProps {
 export const WorkflowConfiguration: React.FC<WorkflowConfigurationProps> = ({ className, hideWorkflowsTab = false }) => {
   const { user } = useAuth();
   const { toast } = useToast();
+  const { isConnected: supabaseConnected, createApprovalChainDocument: submitToSupabase } = useSupabaseRealTimeDocuments();
   const [workflowEngine] = useState(() => new BiDirectionalWorkflowEngine());
   const [workflows, setWorkflows] = useState<WorkflowRoute[]>([]);
   const [selectedWorkflow, setSelectedWorkflow] = useState<WorkflowRoute | null>(null);
@@ -131,6 +134,26 @@ export const WorkflowConfiguration: React.FC<WorkflowConfigurationProps> = ({ cl
     // Open the file in the FileViewer modal instead of a new tab
     setViewingFile(file);
     setShowFileViewer(true);
+  };
+
+  // Helper function to create approval chain channel
+  const createApprovalChainChannel = (docId: string, title: string, submitterName: string, recipientIds: string[], recipientNames: string[]) => {
+    try {
+      const channel = channelAutoCreationService.createDocumentChannel({
+        documentId: docId,
+        documentTitle: title,
+        submittedBy: user?.id || 'unknown',
+        submittedByName: submitterName,
+        recipients: recipientIds,
+        recipientNames: recipientNames,
+        source: 'Approval Chain Bypass',
+        submittedAt: new Date()
+      });
+      
+      console.log('✅ Channel auto-created:', channel.id);
+    } catch (error) {
+      console.error('❌ Failed to auto-create channel:', error);
+    }
   };
 
   useEffect(() => {
@@ -294,78 +317,7 @@ export const WorkflowConfiguration: React.FC<WorkflowConfigurationProps> = ({ cl
         ? await convertFilesToBase64(uploadedFiles)
         : [];
       
-      // Map recipient IDs to display names for UI
-      const getRecipientName = (recipientId: string) => {
-        const recipientMap: { [key: string]: string } = {
-          // Leadership
-          'principal-dr.-robert-principal': 'Dr. Robert Principal',
-          'registrar-prof.-sarah-registrar': 'Prof. Sarah Registrar',
-          'dean-dr.-maria-dean': 'Dr. Maria Dean',
-          'chairman-mr.-david-chairman': 'Mr. David Chairman',
-          'director-(for-information)-ms.-lisa-director': 'Ms. Lisa Director',
-          'leadership-prof.-leadership-officer': 'Prof. Leadership Officer',
-          
-          // CDC Employees
-          'cdc-head-dr.-cdc-head': 'Dr. CDC Head',
-          'cdc-coordinator-prof.-cdc-coordinator': 'Prof. CDC Coordinator',
-          
-          // HODs
-          'hod-dr.-eee-hod-eee': 'Dr. EEE HOD',
-          'hod-dr.-mech-hod-mech': 'Dr. MECH HOD',
-          'hod-dr.-cse-hod-cse': 'Dr. CSE HOD',
-          'hod-dr.-ece-hod-ece': 'Dr. ECE HOD',
-          'hod-dr.-csm-hod-csm': 'Dr. CSM HOD',
-          'hod-dr.-cso-hod-cso': 'Dr. CSO HOD',
-          'hod-dr.-csd-hod-csd': 'Dr. CSD HOD',
-          'hod-dr.-csc-hod-csc': 'Dr. CSC HOD',
-          
-          // Program Department Heads
-          'program-department-head-prof.-eee-head-eee': 'Prof. EEE Head',
-          'program-department-head-prof.-mech-head-mech': 'Prof. MECH Head',
-          'program-department-head-prof.-cse-head-cse': 'Prof. CSE Head',
-          'program-department-head-prof.-ece-head-ece': 'Prof. ECE Head',
-          'program-department-head-prof.-csm-head-csm': 'Prof. CSM Head',
-          'program-department-head-prof.-cso-head-cso': 'Prof. CSO Head',
-          'program-department-head-prof.-csd-head-csd': 'Prof. CSD Head',
-          'program-department-head-prof.-csc-head-csc': 'Prof. CSC Head'
-        };
-        
-        // If we have a mapping, use it
-        if (recipientMap[recipientId]) {
-          return recipientMap[recipientId];
-        }
-        
-        // Otherwise, try to extract the name from the ID
-        const parts = recipientId.split('-');
-        
-        // Try to find name pattern (usually contains Dr., Prof., Mr., Ms., etc.)
-        let name = '';
-        for (let i = 0; i < parts.length; i++) {
-          if (parts[i].match(/^(dr\.|prof\.|mr\.|ms\.|dr|prof|mr|ms)$/i)) {
-            // Found a title, collect the name parts
-            const titleIndex = i;
-            name = parts.slice(titleIndex).join(' ');
-            // Clean up and capitalize
-            name = name.replace(/-/g, ' ')
-                      .split(' ')
-                      .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
-                      .join(' ');
-            break;
-          }
-        }
-        
-        // If we couldn't extract a proper name, use the whole ID cleaned up
-        if (!name) {
-          name = recipientId.replace(/-/g, ' ')
-                           .split(' ')
-                           .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
-                           .join(' ');
-        }
-        
-        return name;
-      };
-      
-      // Convert recipient IDs to display names
+      // Convert recipient IDs to display names using centralized utility
       const recipientNames = selectedRecipients.map((id: string) => getRecipientName(id));
       
       console.log('📋 [Approval Chain Bypass] Creating tracking card with recipients:', {
@@ -475,6 +427,98 @@ export const WorkflowConfiguration: React.FC<WorkflowConfigurationProps> = ({ cl
         comments: []
       };
       
+      // ========================================
+      // SUPABASE PATH: Use Supabase when connected
+      // ========================================
+      if (supabaseConnected) {
+        console.log('🚀 Using Supabase for approval chain submission');
+        
+        try {
+          // Submit to Supabase
+          const supabaseDoc = await submitToSupabase({
+            trackingId: trackingCard.id,
+            title: documentTitle,
+            description: documentDescription,
+            type: documentTypes[0]?.charAt(0).toUpperCase() + documentTypes[0]?.slice(1) || 'Document',
+            priority: documentPriority,
+            recipients: recipientNames,
+            recipientIds: selectedRecipients,
+            routingType: workflowType,
+            isEmergency: false,
+            isParallel: workflowType === 'parallel' || workflowType === 'bidirectional',
+            source: 'approval-chain-bypass',
+            metadata: {
+              files: serializedFiles,
+              fileAssignments: documentAssignments,
+              submittedByDepartment: currentUserDept,
+              submittedByDesignation: currentUserDesignation
+            },
+            workflow: trackingCard.workflow
+          });
+
+          console.log('✅ [Supabase] Approval chain document created:', supabaseDoc.id);
+
+          // Also save to localStorage for backward compatibility
+          const trackingCardWithSupabaseId = { ...trackingCard, supabaseId: supabaseDoc.id };
+          const existingCards = JSON.parse(localStorage.getItem('submitted-documents') || '[]');
+          existingCards.unshift(trackingCardWithSupabaseId);
+          const limitedCards = existingCards.slice(0, 50);
+          localStorage.setItem('submitted-documents', JSON.stringify(limitedCards));
+
+          // Create approval card for localStorage
+          const approvalCard = {
+            id: trackingCard.id,
+            title: documentTitle,
+            type: documentTypes[0]?.charAt(0).toUpperCase() + documentTypes[0]?.slice(1) || 'Document',
+            submitter: currentUserName,
+            submittedDate: new Date().toISOString().split('T')[0],
+            status: 'pending',
+            priority: documentPriority,
+            description: documentDescription,
+            recipients: recipientNames,
+            recipientIds: selectedRecipients,
+            files: serializedFiles,
+            fileAssignments: documentAssignments,
+            routingType: workflowType,
+            trackingCardId: trackingCard.id,
+            source: 'approval-chain-bypass',
+            supabaseId: supabaseDoc.id
+          };
+
+          const existingApprovals = JSON.parse(localStorage.getItem('pending-approvals') || '[]');
+          existingApprovals.unshift(approvalCard);
+          localStorage.setItem('pending-approvals', JSON.stringify(existingApprovals.slice(0, 50)));
+
+          // Dispatch events
+          window.dispatchEvent(new CustomEvent('workflow-updated', { detail: { trackingCard: trackingCardWithSupabaseId } }));
+          window.dispatchEvent(new CustomEvent('approval-card-created', { detail: { approval: approvalCard } }));
+
+          // Auto-create channel
+          createApprovalChainChannel(trackingCard.id, documentTitle, currentUserName, selectedRecipients, recipientNames);
+
+          toast({
+            title: "Workflow Document Submitted (Supabase)",
+            description: `Document submitted to ${selectedRecipients.length} recipient(s) via real-time sync.`,
+          });
+
+          resetForms();
+          return;
+        } catch (error) {
+          console.error('❌ Supabase submission failed, falling back to localStorage:', error);
+          toast({
+            title: "Supabase Error",
+            description: "Falling back to local storage. Your document will still be tracked.",
+            variant: "destructive"
+          });
+          // Fall through to localStorage path
+        }
+      }
+
+      // ========================================
+      // LOCALSTORAGE PATH: Fallback when Supabase not connected
+      // ========================================
+      console.log('📦 Using localStorage for approval chain submission');
+      
       // Save to localStorage for tracking with quota management
       try {
         const existingCards = JSON.parse(localStorage.getItem('submitted-documents') || '[]');
@@ -520,84 +564,7 @@ export const WorkflowConfiguration: React.FC<WorkflowConfigurationProps> = ({ cl
       
       // Create approval card for Approval Center following "Budget Request – Lab Equipment" layout
       if (selectedRecipients.length > 0) {
-        // Map recipient IDs to names using the same format as other components
-        const getRecipientName = (recipientId: string) => {
-          const recipientMap: { [key: string]: string } = {
-            // Leadership
-            'principal-dr.-robert-principal': 'Dr. Robert Principal',
-            'registrar-prof.-sarah-registrar': 'Prof. Sarah Registrar',
-            'dean-dr.-maria-dean': 'Dr. Maria Dean',
-            'chairman-mr.-david-chairman': 'Mr. David Chairman',
-            'director-(for-information)-ms.-lisa-director': 'Ms. Lisa Director',
-            'leadership-prof.-leadership-officer': 'Prof. Leadership Officer',
-            
-            // CDC Employees
-            'cdc-head-dr.-cdc-head': 'Dr. CDC Head',
-            'cdc-coordinator-prof.-cdc-coordinator': 'Prof. CDC Coordinator',
-            'cdc-executive-ms.-cdc-executive': 'Ms. CDC Executive',
-            
-            // Administrative
-            'controller-of-examinations-dr.-robert-controller': 'Dr. Robert Controller',
-            'asst.-dean-iiic-prof.-asst-dean': 'Prof. Asst Dean',
-            'head-operations-mr.-michael-operations': 'Mr. Michael Operations',
-            'librarian-ms.-jennifer-librarian': 'Ms. Jennifer Librarian',
-            'ssg-prof.-william-ssg': 'Prof. William SSG',
-            
-            // HODs
-            'hod-dr.-eee-hod-eee': 'Dr. EEE HOD',
-            'hod-dr.-mech-hod-mech': 'Dr. MECH HOD',
-            'hod-dr.-cse-hod-cse': 'Dr. CSE HOD',
-            'hod-dr.-ece-hod-ece': 'Dr. ECE HOD',
-            'hod-dr.-csm-hod-csm': 'Dr. CSM HOD',
-            'hod-dr.-cso-hod-cso': 'Dr. CSO HOD',
-            'hod-dr.-csd-hod-csd': 'Dr. CSD HOD',
-            'hod-dr.-csc-hod-csc': 'Dr. CSC HOD',
-            
-            // Program Department Heads
-            'program-department-head-prof.-eee-head-eee': 'Prof. EEE Head',
-            'program-department-head-prof.-mech-head-mech': 'Prof. MECH Head',
-            'program-department-head-prof.-cse-head-cse': 'Prof. CSE Head',
-            'program-department-head-prof.-ece-head-ece': 'Prof. ECE Head',
-            'program-department-head-prof.-csm-head-csm': 'Prof. CSM Head',
-            'program-department-head-prof.-cso-head-cso': 'Prof. CSO Head',
-            'program-department-head-prof.-csd-head-csd': 'Prof. CSD Head',
-            'program-department-head-prof.-csc-head-csc': 'Prof. CSC Head'
-          };
-          
-          // If we have a mapping, use it
-          if (recipientMap[recipientId]) {
-            return recipientMap[recipientId];
-          }
-          
-          // Otherwise, try to extract the name from the ID
-          const parts = recipientId.split('-');
-          
-          // Try to find name pattern (usually contains Dr., Prof., Mr., Ms., etc.)
-          let name = '';
-          for (let i = 0; i < parts.length; i++) {
-            if (parts[i].match(/^(dr\.|prof\.|mr\.|ms\.|dr|prof|mr|ms)$/i)) {
-              // Found a title, collect the name parts
-              const titleIndex = i;
-              name = parts.slice(titleIndex).join(' ');
-              // Clean up and capitalize
-              name = name.replace(/-/g, ' ')
-                        .split(' ')
-                        .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
-                        .join(' ');
-              break;
-            }
-          }
-          
-          // If we couldn't extract a proper name, use the whole ID cleaned up
-          if (!name) {
-            name = recipientId.replace(/-/g, ' ')
-                             .split(' ')
-                             .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
-                             .join(' ');
-          }
-          
-          return name;
-        };
+        // Use centralized recipient name lookup (imported from @/utils/recipientUtils)
         
         const approvalCard = {
           id: trackingCard.id,

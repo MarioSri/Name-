@@ -1,248 +1,122 @@
+/**
+ * Supabase Realtime Service
+ * Handles real-time subscriptions for all tables
+ */
+
 import { supabase } from '@/lib/supabase';
 import { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/supabase-js';
 
-export type DatabaseTable = 
-  | 'documents' 
-  | 'approval_cards' 
-  | 'meetings' 
-  | 'messages' 
-  | 'notifications' 
-  | 'users'
-  | 'channels'
-  | 'document_comments'
-  | 'meeting_participants';
-
-export type ChangeType = 'INSERT' | 'UPDATE' | 'DELETE';
-
-export interface RealtimeSubscription<T = any> {
+export interface RealtimeSubscription {
   channel: RealtimeChannel;
   unsubscribe: () => void;
 }
 
-export interface RealtimeOptions<T = any> {
-  table: DatabaseTable;
-  event?: ChangeType | '*';
-  schema?: string;
+export interface SubscriptionConfig<T> {
+  table: string;
+  event?: 'INSERT' | 'UPDATE' | 'DELETE' | '*';
   filter?: string;
-  onInsert?: (payload: T) => void;
-  onUpdate?: (payload: T) => void;
+  schema?: string;
+  onInsert?: (payload: { new: T }) => void;
+  onUpdate?: (payload: { new: T; old: T }) => void;
   onDelete?: (payload: { old: T }) => void;
   onChange?: (payload: RealtimePostgresChangesPayload<T>) => void;
 }
 
 class SupabaseRealtimeService {
   private channels: Map<string, RealtimeChannel> = new Map();
-  private subscriptionCount: Map<string, number> = new Map();
+  private subscriptionCount = 0;
 
   /**
-   * Subscribe to real-time changes on a table
+   * Subscribe to table changes
    */
-  subscribe<T = any>(options: RealtimeOptions<T>): RealtimeSubscription<T> {
-    const {
-      table,
-      event = '*',
-      schema = 'public',
-      filter,
-      onInsert,
-      onUpdate,
-      onDelete,
-      onChange
-    } = options;
-
-    // Create unique channel ID
-    const channelId = `${schema}:${table}:${event}:${filter || 'all'}`;
+  subscribe<T extends Record<string, any>>(config: SubscriptionConfig<T>): RealtimeSubscription {
+    const channelName = `${config.table}-${++this.subscriptionCount}`;
     
-    // Check if channel already exists
-    let channel = this.channels.get(channelId);
-    
-    if (!channel) {
-      // Create new channel
-      channel = supabase.channel(channelId);
-      
-      // Configure postgres changes listener
-      const postgresChange = channel.on(
+    const channel = supabase
+      .channel(channelName)
+      .on(
         'postgres_changes',
         {
-          event: event as any,
-          schema,
-          table,
-          filter
+          event: config.event || '*',
+          schema: config.schema || 'public',
+          table: config.table,
+          filter: config.filter,
         },
         (payload: RealtimePostgresChangesPayload<T>) => {
-          console.log(`[Realtime] ${table} ${payload.eventType}:`, payload);
+          console.log(`📡 [${config.table}] Realtime event:`, payload.eventType);
           
-          // Call specific handlers
-          if (payload.eventType === 'INSERT' && onInsert) {
-            onInsert(payload.new as T);
-          } else if (payload.eventType === 'UPDATE' && onUpdate) {
-            onUpdate(payload.new as T);
-          } else if (payload.eventType === 'DELETE' && onDelete) {
-            onDelete({ old: payload.old as T });
+          if (config.onChange) {
+            config.onChange(payload);
           }
-          
-          // Call general change handler
-          if (onChange) {
-            onChange(payload);
-          }
-        }
-      );
 
-      // Subscribe to channel
-      channel.subscribe((status) => {
-        console.log(`[Realtime] Channel ${channelId} status:`, status);
-        
-        if (status === 'SUBSCRIBED') {
-          console.log(`[Realtime] ✅ Successfully subscribed to ${table}`);
-        } else if (status === 'CHANNEL_ERROR') {
-          console.error(`[Realtime] ❌ Error subscribing to ${table}`);
-        } else if (status === 'TIMED_OUT') {
-          console.error(`[Realtime] ⏱️ Subscription to ${table} timed out`);
+          switch (payload.eventType) {
+            case 'INSERT':
+              if (config.onInsert) {
+                config.onInsert({ new: payload.new as T });
+              }
+              break;
+            case 'UPDATE':
+              if (config.onUpdate) {
+                config.onUpdate({ new: payload.new as T, old: payload.old as T });
+              }
+              break;
+            case 'DELETE':
+              if (config.onDelete) {
+                config.onDelete({ old: payload.old as T });
+              }
+              break;
+          }
         }
+      )
+      .subscribe((status) => {
+        console.log(`📡 [${config.table}] Subscription status:`, status);
       });
 
-      this.channels.set(channelId, channel);
-      this.subscriptionCount.set(channelId, 1);
-    } else {
-      // Increment subscription count for existing channel
-      const count = this.subscriptionCount.get(channelId) || 0;
-      this.subscriptionCount.set(channelId, count + 1);
-    }
+    this.channels.set(channelName, channel);
 
-    // Return subscription with unsubscribe function
     return {
       channel,
-      unsubscribe: () => this.unsubscribe(channelId)
+      unsubscribe: () => {
+        channel.unsubscribe();
+        this.channels.delete(channelName);
+      },
     };
-  }
-
-  /**
-   * Unsubscribe from a channel
-   */
-  private unsubscribe(channelId: string): void {
-    const count = this.subscriptionCount.get(channelId) || 0;
-    
-    if (count <= 1) {
-      // Last subscription, remove channel
-      const channel = this.channels.get(channelId);
-      if (channel) {
-        supabase.removeChannel(channel);
-        this.channels.delete(channelId);
-        this.subscriptionCount.delete(channelId);
-        console.log(`[Realtime] 🔌 Unsubscribed from ${channelId}`);
-      }
-    } else {
-      // Decrement subscription count
-      this.subscriptionCount.set(channelId, count - 1);
-    }
   }
 
   /**
    * Subscribe to multiple tables at once
    */
-  subscribeToMultiple<T = any>(subscriptions: RealtimeOptions<T>[]): RealtimeSubscription<T>[] {
-    return subscriptions.map(options => this.subscribe(options));
+  subscribeToMultiple<T extends Record<string, any>>(
+    configs: SubscriptionConfig<T>[]
+  ): RealtimeSubscription[] {
+    return configs.map((config) => this.subscribe(config));
   }
 
   /**
    * Unsubscribe from all channels
    */
   unsubscribeAll(): void {
-    this.channels.forEach((channel, channelId) => {
-      supabase.removeChannel(channel);
-      console.log(`[Realtime] 🔌 Unsubscribed from ${channelId}`);
+    this.channels.forEach((channel, name) => {
+      console.log(`📡 Unsubscribing from ${name}`);
+      channel.unsubscribe();
     });
     this.channels.clear();
-    this.subscriptionCount.clear();
   }
 
   /**
-   * Get active channel count
+   * Get active subscription count
    */
-  getActiveChannelCount(): number {
+  getActiveSubscriptions(): number {
     return this.channels.size;
   }
 
   /**
-   * Check if connected to Supabase
+   * Check if connected to realtime
    */
   isConnected(): boolean {
-    return supabase.getChannels().length > 0;
-  }
-
-  /**
-   * Subscribe to presence (user online status)
-   */
-  subscribeToPresence(channelName: string, userId: string, userMetadata: any = {}) {
-    const channel = supabase.channel(channelName, {
-      config: {
-        presence: {
-          key: userId
-        }
-      }
-    });
-
-    channel
-      .on('presence', { event: 'sync' }, () => {
-        const state = channel.presenceState();
-        console.log('[Realtime] Presence sync:', state);
-      })
-      .on('presence', { event: 'join' }, ({ key, newPresences }) => {
-        console.log('[Realtime] User joined:', key, newPresences);
-      })
-      .on('presence', { event: 'leave' }, ({ key, leftPresences }) => {
-        console.log('[Realtime] User left:', key, leftPresences);
-      })
-      .subscribe(async (status) => {
-        if (status === 'SUBSCRIBED') {
-          await channel.track({
-            user_id: userId,
-            online_at: new Date().toISOString(),
-            ...userMetadata
-          });
-        }
-      });
-
-    return {
-      channel,
-      unsubscribe: () => {
-        channel.untrack();
-        supabase.removeChannel(channel);
-      }
-    };
-  }
-
-  /**
-   * Subscribe to broadcast messages
-   */
-  subscribeToBroadcast(
-    channelName: string,
-    eventName: string,
-    callback: (payload: any) => void
-  ) {
-    const channel = supabase.channel(channelName);
-
-    channel
-      .on('broadcast', { event: eventName }, (payload) => {
-        console.log(`[Realtime] Broadcast received on ${eventName}:`, payload);
-        callback(payload);
-      })
-      .subscribe();
-
-    return {
-      channel,
-      send: (payload: any) => {
-        channel.send({
-          type: 'broadcast',
-          event: eventName,
-          payload
-        });
-      },
-      unsubscribe: () => {
-        supabase.removeChannel(channel);
-      }
-    };
+    return this.channels.size > 0;
   }
 }
 
-// Export singleton instance
 export const realtimeService = new SupabaseRealtimeService();
+export default realtimeService;

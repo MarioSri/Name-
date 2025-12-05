@@ -1,203 +1,533 @@
 /**
- * React hook for real-time meeting management using Supabase Realtime
+ * useSupabaseRealTimeMeetings Hook
+ * React hook for real-time meeting management using Supabase
+ * Provides CRUD operations and real-time subscriptions for meetings
  */
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
-import { 
-  meetingsRealtimeService, 
-  Meeting 
-} from '@/services/MeetingsRealtimeService';
-import { RealtimeSubscription } from '@/services/SupabaseRealtimeService';
+import { supabase } from '@/lib/supabase';
+import { useToast } from '@/hooks/use-toast';
+import { Meeting, MeetingAttendee, MeetingStatus, MeetingPriority, MeetingType, MeetingCategory } from '@/types/meeting';
 
-export interface UseSupabaseRealTimeMeetingsReturn {
-  // Data
-  meetings: Meeting[];
-  
-  // Actions
-  createMeeting: (meeting: Omit<Meeting, 'id' | 'created_at' | 'updated_at'>) => Promise<Meeting>;
-  updateMeeting: (id: string, updates: Partial<Meeting>) => Promise<Meeting>;
-  cancelMeeting: (id: string) => Promise<Meeting>;
-  deleteMeeting: (id: string) => Promise<void>;
-  
-  // State
-  loading: boolean;
-  error: string | null;
-  
-  // Real-time status
-  isConnected: boolean;
+// Supabase meeting record structure (matches actual schema)
+interface SupabaseMeeting {
+  id: string;
+  meeting_id: string;
+  title: string;
+  description?: string;
+  host_id: string;
+  host_user_id: string;
+  host_name: string;
+  scheduled_start?: string;
+  scheduled_end?: string;
+  actual_start?: string;
+  actual_end?: string;
+  status: string;
+  meeting_url?: string;
+  meeting_type: string;
+  is_recurring: boolean;
+  recurrence_rule?: string;
+  created_at: string;
+  updated_at: string;
 }
 
-export const useSupabaseRealTimeMeetings = (): UseSupabaseRealTimeMeetingsReturn => {
+// Supabase meeting participant record
+interface SupabaseMeetingParticipant {
+  id: string;
+  meeting_id: string;
+  participant_id: string;
+  participant_user_id: string;
+  participant_name: string;
+  status: string;
+  joined_at?: string;
+  left_at?: string;
+}
+
+interface UseSupabaseRealTimeMeetingsResult {
+  meetings: Meeting[];
+  createMeeting: (meeting: Partial<Meeting>) => Promise<Meeting>;
+  updateMeeting: (id: string, updates: Partial<Meeting>) => Promise<Meeting>;
+  deleteMeeting: (id: string) => Promise<void>;
+  loading: boolean;
+  error: string | null;
+  isConnected: boolean;
+  refetch: () => Promise<void>;
+}
+
+// Convert Supabase record to Meeting type
+function toMeeting(record: SupabaseMeeting, participants: SupabaseMeetingParticipant[] = []): Meeting {
+  const attendees: MeetingAttendee[] = participants.map(p => ({
+    id: p.participant_user_id,
+    name: p.participant_name,
+    email: '',
+    role: 'Attendee',
+    department: undefined,
+    status: p.status as any,
+    responseTime: p.joined_at ? new Date(p.joined_at) : undefined,
+    isRequired: true,
+    canEdit: false
+  }));
+
+  // Parse date and time from scheduled_start
+  const startDate = record.scheduled_start ? new Date(record.scheduled_start) : new Date();
+  const endDate = record.scheduled_end ? new Date(record.scheduled_end) : new Date(startDate.getTime() + 60 * 60 * 1000);
+  const durationMinutes = Math.round((endDate.getTime() - startDate.getTime()) / (1000 * 60));
+
+  return {
+    id: record.id,
+    title: record.title,
+    description: record.description || '',
+    date: startDate.toISOString().split('T')[0],
+    time: startDate.toTimeString().slice(0, 5),
+    duration: durationMinutes || 60,
+    location: record.meeting_url || '',
+    type: record.meeting_type as MeetingType,
+    status: record.status as MeetingStatus,
+    priority: 'medium' as MeetingPriority,
+    category: 'general' as MeetingCategory,
+    isRecurring: record.is_recurring,
+    parentMeetingId: undefined,
+    recurringPattern: record.recurrence_rule ? { frequency: 'weekly', interval: 1 } : undefined,
+    meetingLinks: record.meeting_url ? { primary: 'custom' as any } : undefined,
+    notifications: undefined,
+    department: undefined,
+    tags: [],
+    attendees,
+    documents: [],
+    createdBy: record.host_name,
+    createdAt: new Date(record.created_at),
+    updatedAt: new Date(record.updated_at)
+  };
+}
+
+// Convert Meeting to Supabase insert format
+function toSupabaseInsert(meeting: Partial<Meeting>, userId: string, userName: string): Partial<SupabaseMeeting> {
+  // Build scheduled_start from date and time
+  const dateStr = meeting.date || new Date().toISOString().split('T')[0];
+  const timeStr = meeting.time || '09:00';
+  const scheduledStart = new Date(`${dateStr}T${timeStr}:00`);
+  const durationMs = (meeting.duration || 60) * 60 * 1000;
+  const scheduledEnd = new Date(scheduledStart.getTime() + durationMs);
+
+  return {
+    meeting_id: `mtg-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+    title: meeting.title || 'Untitled Meeting',
+    description: meeting.description,
+    host_user_id: userId,
+    host_name: userName,
+    scheduled_start: scheduledStart.toISOString(),
+    scheduled_end: scheduledEnd.toISOString(),
+    meeting_type: meeting.type || 'video',
+    status: meeting.status || 'scheduled',
+    is_recurring: meeting.isRecurring || false,
+    recurrence_rule: meeting.recurringPattern ? JSON.stringify(meeting.recurringPattern) : undefined,
+    meeting_url: meeting.location || meeting.meetingLinks?.primary
+  };
+}
+
+export function useSupabaseRealTimeMeetings(): UseSupabaseRealTimeMeetingsResult {
   const { user } = useAuth();
+  const { toast } = useToast();
   const [meetings, setMeetings] = useState<Meeting[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isConnected, setIsConnected] = useState(false);
-  const [subscriptions, setSubscriptions] = useState<RealtimeSubscription[]>([]);
+  const subscriptionRef = useRef<any>(null);
+  const participantsSubscriptionRef = useRef<any>(null);
 
-  // Load initial data
-  const loadData = useCallback(async () => {
-    if (!user?.id) return;
+  // Fetch all meetings with participants
+  const fetchMeetings = useCallback(async () => {
+    if (!user) {
+      setMeetings([]);
+      setLoading(false);
+      return;
+    }
 
     try {
       setLoading(true);
       setError(null);
 
-      // Fetch meetings where user is organizer or attendee
-      const data = await meetingsRealtimeService.fetchUserMeetings(user.id);
-      setMeetings(data);
+      // Fetch meetings
+      const { data: meetingsData, error: meetingsError } = await supabase
+        .from('meetings')
+        .select('*')
+        .order('meeting_date', { ascending: true });
 
+      if (meetingsError) {
+        console.error('❌ Error fetching meetings:', meetingsError);
+        setError(meetingsError.message);
+        setIsConnected(false);
+        return;
+      }
+
+      // Fetch all participants
+      const { data: participantsData, error: participantsError } = await supabase
+        .from('meeting_participants')
+        .select('*');
+
+      if (participantsError) {
+        console.warn('⚠️ Error fetching participants:', participantsError);
+      }
+
+      // Group participants by meeting
+      const participantsByMeeting: Record<string, SupabaseMeetingParticipant[]> = {};
+      (participantsData || []).forEach((p: SupabaseMeetingParticipant) => {
+        if (!participantsByMeeting[p.meeting_id]) {
+          participantsByMeeting[p.meeting_id] = [];
+        }
+        participantsByMeeting[p.meeting_id].push(p);
+      });
+
+      // Convert to Meeting objects
+      const convertedMeetings = (meetingsData || []).map((m: SupabaseMeeting) => 
+        toMeeting(m, participantsByMeeting[m.id] || [])
+      );
+
+      setMeetings(convertedMeetings);
       setIsConnected(true);
+      console.log('✅ Loaded', convertedMeetings.length, 'meetings from Supabase');
+
     } catch (err) {
-      console.error('[useSupabaseRealTimeMeetings] Error loading meetings:', err);
-      setError('Failed to load meetings');
+      console.error('❌ Failed to fetch meetings:', err);
+      setError(err instanceof Error ? err.message : 'Failed to fetch meetings');
       setIsConnected(false);
     } finally {
       setLoading(false);
     }
-  }, [user?.id]);
+  }, [user]);
 
-  // Setup real-time subscriptions
+  // Set up real-time subscription
   useEffect(() => {
-    if (!user?.id) return;
+    fetchMeetings();
 
-    const subs: RealtimeSubscription[] = [];
-
-    // Subscribe to meetings where user is organizer or attendee
-    const meetingSubs = meetingsRealtimeService.subscribeToUserMeetings(
-      user.id,
-      {
-        onInsert: (meeting) => {
-          console.log('[useSupabaseRealTimeMeetings] Meeting inserted:', meeting);
-          setMeetings(prev => [meeting, ...prev].sort((a, b) => 
-            new Date(a.start_time).getTime() - new Date(b.start_time).getTime()
-          ));
-          
-          // Show browser notification
-          if ('Notification' in window && Notification.permission === 'granted') {
-            new Notification('New Meeting Scheduled', {
-              body: `${meeting.title} - ${new Date(meeting.start_time).toLocaleString()}`,
-              icon: '/logo.png'
-            });
-          }
-        },
-        onUpdate: (meeting) => {
-          console.log('[useSupabaseRealTimeMeetings] Meeting updated:', meeting);
-          setMeetings(prev => 
-            prev.map(m => m.id === meeting.id ? meeting : m).sort((a, b) => 
-              new Date(a.start_time).getTime() - new Date(b.start_time).getTime()
-            )
-          );
-        },
-        onDelete: (meeting) => {
-          console.log('[useSupabaseRealTimeMeetings] Meeting deleted:', meeting);
-          setMeetings(prev => 
-            prev.filter(m => m.id !== meeting.id)
-          );
+    // Subscribe to meetings table changes
+    subscriptionRef.current = supabase
+      .channel('meetings-realtime')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'meetings' },
+        (payload) => {
+          console.log('📡 Meetings realtime update:', payload.eventType);
+          fetchMeetings(); // Refetch on any change
         }
-      }
-    );
-    subs.push(...meetingSubs);
+      )
+      .subscribe((status) => {
+        console.log('📡 Meetings subscription status:', status);
+        setIsConnected(status === 'SUBSCRIBED');
+      });
 
-    setSubscriptions(subs);
-    setIsConnected(true);
+    // Subscribe to participants table changes
+    participantsSubscriptionRef.current = supabase
+      .channel('meeting-participants-realtime')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'meeting_participants' },
+        (payload) => {
+          console.log('📡 Meeting participants realtime update:', payload.eventType);
+          fetchMeetings(); // Refetch on any change
+        }
+      )
+      .subscribe();
 
-    // Load initial data
-    loadData();
-
-    // Cleanup subscriptions on unmount
     return () => {
-      subs.forEach(sub => sub.unsubscribe());
-      setIsConnected(false);
+      if (subscriptionRef.current) {
+        supabase.removeChannel(subscriptionRef.current);
+      }
+      if (participantsSubscriptionRef.current) {
+        supabase.removeChannel(participantsSubscriptionRef.current);
+      }
     };
-  }, [user?.id, loadData]);
+  }, [fetchMeetings]);
 
   // Create a new meeting
-  const createMeeting = useCallback(async (
-    data: Omit<Meeting, 'id' | 'created_at' | 'updated_at'>
-  ): Promise<Meeting> => {
-    try {
-      setLoading(true);
-      setError(null);
-
-      const meeting = await meetingsRealtimeService.createMeeting(data);
-      return meeting;
-    } catch (err) {
-      console.error('[useSupabaseRealTimeMeetings] Error creating meeting:', err);
-      setError('Failed to create meeting');
-      throw err;
-    } finally {
-      setLoading(false);
+  const createMeeting = useCallback(async (meetingData: Partial<Meeting>): Promise<Meeting> => {
+    if (!user) {
+      throw new Error('User not authenticated');
     }
-  }, []);
 
-  // Update a meeting
-  const updateMeeting = useCallback(async (
-    id: string,
-    updates: Partial<Meeting>
-  ): Promise<Meeting> => {
     try {
-      setLoading(true);
-      setError(null);
+      // First, get or create the host recipient record
+      const hostUserId = user.id || user.email || 'unknown';
+      const hostName = user.name || user.email || 'Unknown User';
+      
+      // Try to find existing recipient
+      let { data: hostRecipient } = await supabase
+        .from('recipients')
+        .select('id')
+        .eq('user_id', hostUserId)
+        .single();
 
-      return await meetingsRealtimeService.updateMeeting(id, updates);
+      // If no recipient exists, create one
+      if (!hostRecipient) {
+        const { data: newRecipient, error: recipientError } = await supabase
+          .from('recipients')
+          .insert({
+            user_id: hostUserId,
+            name: hostName,
+            email: user.email || '',
+            role: user.role || 'Staff',
+            department: 'General'
+          })
+          .select('id')
+          .single();
+
+        if (recipientError) {
+          console.warn('⚠️ Could not create host recipient:', recipientError);
+          // Continue without host_id - schema may need adjustment
+        } else {
+          hostRecipient = newRecipient;
+        }
+      }
+
+      const insertData: any = toSupabaseInsert(meetingData, hostUserId, hostName);
+      if (hostRecipient) {
+        insertData.host_id = hostRecipient.id;
+      }
+
+      const { data: newMeeting, error: insertError } = await supabase
+        .from('meetings')
+        .insert(insertData)
+        .select()
+        .single();
+
+      if (insertError) {
+        console.error('❌ Error creating meeting:', insertError);
+        throw new Error(insertError.message);
+      }
+
+      // Insert participants if provided
+      if (meetingData.attendees && meetingData.attendees.length > 0) {
+        for (const attendee of meetingData.attendees) {
+          // Find or create participant recipient
+          let { data: participantRecipient } = await supabase
+            .from('recipients')
+            .select('id')
+            .eq('user_id', attendee.id)
+            .single();
+
+          if (!participantRecipient) {
+            const { data: newParticipant } = await supabase
+              .from('recipients')
+              .insert({
+                user_id: attendee.id,
+                name: attendee.name,
+                email: attendee.email || '',
+                role: attendee.role || 'Attendee',
+                department: attendee.department || 'General'
+              })
+              .select('id')
+              .single();
+            participantRecipient = newParticipant;
+          }
+
+          if (participantRecipient) {
+            await supabase
+              .from('meeting_participants')
+              .insert({
+                meeting_id: newMeeting.id,
+                participant_id: participantRecipient.id,
+                participant_user_id: attendee.id,
+                participant_name: attendee.name,
+                status: attendee.status || 'invited'
+              });
+          }
+        }
+      }
+
+      const created = toMeeting(newMeeting, []);
+      console.log('✅ Created meeting:', created.id);
+
+      toast({
+        title: "Meeting Created",
+        description: `"${created.title}" has been scheduled.`
+      });
+
+      return created;
+
     } catch (err) {
-      console.error('[useSupabaseRealTimeMeetings] Error updating meeting:', err);
-      setError('Failed to update meeting');
+      console.error('❌ Failed to create meeting:', err);
+      toast({
+        title: "Error",
+        description: err instanceof Error ? err.message : 'Failed to create meeting',
+        variant: "destructive"
+      });
       throw err;
-    } finally {
-      setLoading(false);
     }
-  }, []);
+  }, [user, toast]);
 
-  // Cancel a meeting
-  const cancelMeeting = useCallback(async (id: string): Promise<Meeting> => {
+  // Update an existing meeting
+  const updateMeeting = useCallback(async (id: string, updates: Partial<Meeting>): Promise<Meeting> => {
+    if (!user) {
+      throw new Error('User not authenticated');
+    }
+
     try {
-      setLoading(true);
-      setError(null);
+      const updateData: any = {};
+      
+      if (updates.title !== undefined) updateData.title = updates.title;
+      if (updates.description !== undefined) updateData.description = updates.description;
+      
+      // Handle date/time -> scheduled_start/end conversion
+      if (updates.date !== undefined || updates.time !== undefined || updates.duration !== undefined) {
+        // Fetch existing meeting to get current values
+        const { data: existing } = await supabase
+          .from('meetings')
+          .select('scheduled_start, scheduled_end')
+          .eq('id', id)
+          .single();
+        
+        const existingStart = existing?.scheduled_start ? new Date(existing.scheduled_start) : new Date();
+        const existingEnd = existing?.scheduled_end ? new Date(existing.scheduled_end) : new Date(existingStart.getTime() + 60 * 60 * 1000);
+        
+        const dateStr = updates.date || existingStart.toISOString().split('T')[0];
+        const timeStr = updates.time || existingStart.toTimeString().slice(0, 5);
+        const durationMinutes = updates.duration || Math.round((existingEnd.getTime() - existingStart.getTime()) / (1000 * 60));
+        
+        const newStart = new Date(`${dateStr}T${timeStr}:00`);
+        const newEnd = new Date(newStart.getTime() + durationMinutes * 60 * 1000);
+        
+        updateData.scheduled_start = newStart.toISOString();
+        updateData.scheduled_end = newEnd.toISOString();
+      }
+      
+      if (updates.location !== undefined) updateData.meeting_url = updates.location;
+      if (updates.type !== undefined) updateData.meeting_type = updates.type;
+      if (updates.status !== undefined) updateData.status = updates.status;
+      if (updates.isRecurring !== undefined) updateData.is_recurring = updates.isRecurring;
+      if (updates.recurringPattern !== undefined) updateData.recurrence_rule = JSON.stringify(updates.recurringPattern);
 
-      return await meetingsRealtimeService.cancelMeeting(id);
+      updateData.updated_at = new Date().toISOString();
+
+      const { data: updatedMeeting, error: updateError } = await supabase
+        .from('meetings')
+        .update(updateData)
+        .eq('id', id)
+        .select()
+        .single();
+
+      if (updateError) {
+        console.error('❌ Error updating meeting:', updateError);
+        throw new Error(updateError.message);
+      }
+
+      // Update participants if provided
+      if (updates.attendees) {
+        // Delete existing participants
+        await supabase
+          .from('meeting_participants')
+          .delete()
+          .eq('meeting_id', id);
+
+        // Insert new participants
+        for (const attendee of updates.attendees) {
+          // Find or create participant recipient
+          let { data: participantRecipient } = await supabase
+            .from('recipients')
+            .select('id')
+            .eq('user_id', attendee.id)
+            .single();
+
+          if (!participantRecipient) {
+            const { data: newParticipant } = await supabase
+              .from('recipients')
+              .insert({
+                user_id: attendee.id,
+                name: attendee.name,
+                email: attendee.email || '',
+                role: attendee.role || 'Attendee',
+                department: attendee.department || 'General'
+              })
+              .select('id')
+              .single();
+            participantRecipient = newParticipant;
+          }
+
+          if (participantRecipient) {
+            await supabase
+              .from('meeting_participants')
+              .insert({
+                meeting_id: id,
+                participant_id: participantRecipient.id,
+                participant_user_id: attendee.id,
+                participant_name: attendee.name,
+                status: attendee.status || 'invited'
+              });
+          }
+        }
+      }
+
+      const updated = toMeeting(updatedMeeting, []);
+      console.log('✅ Updated meeting:', id);
+
+      toast({
+        title: "Meeting Updated",
+        description: `"${updated.title}" has been updated.`
+      });
+
+      return updated;
+
     } catch (err) {
-      console.error('[useSupabaseRealTimeMeetings] Error cancelling meeting:', err);
-      setError('Failed to cancel meeting');
+      console.error('❌ Failed to update meeting:', err);
+      toast({
+        title: "Error",
+        description: err instanceof Error ? err.message : 'Failed to update meeting',
+        variant: "destructive"
+      });
       throw err;
-    } finally {
-      setLoading(false);
     }
-  }, []);
+  }, [user, toast]);
 
   // Delete a meeting
   const deleteMeeting = useCallback(async (id: string): Promise<void> => {
-    try {
-      setLoading(true);
-      setError(null);
-
-      await meetingsRealtimeService.deleteMeeting(id);
-    } catch (err) {
-      console.error('[useSupabaseRealTimeMeetings] Error deleting meeting:', err);
-      setError('Failed to delete meeting');
-      throw err;
-    } finally {
-      setLoading(false);
+    if (!user) {
+      throw new Error('User not authenticated');
     }
-  }, []);
+
+    try {
+      // Delete participants first
+      await supabase
+        .from('meeting_participants')
+        .delete()
+        .eq('meeting_id', id);
+
+      // Delete the meeting
+      const { error: deleteError } = await supabase
+        .from('meetings')
+        .delete()
+        .eq('id', id);
+
+      if (deleteError) {
+        console.error('❌ Error deleting meeting:', deleteError);
+        throw new Error(deleteError.message);
+      }
+
+      console.log('✅ Deleted meeting:', id);
+
+      toast({
+        title: "Meeting Deleted",
+        description: "The meeting has been removed."
+      });
+
+    } catch (err) {
+      console.error('❌ Failed to delete meeting:', err);
+      toast({
+        title: "Error",
+        description: err instanceof Error ? err.message : 'Failed to delete meeting',
+        variant: "destructive"
+      });
+      throw err;
+    }
+  }, [user, toast]);
 
   return {
-    // Data
     meetings,
-    
-    // Actions
     createMeeting,
     updateMeeting,
-    cancelMeeting,
     deleteMeeting,
-    
-    // State
     loading,
     error,
-    
-    // Real-time status
-    isConnected
+    isConnected,
+    refetch: fetchMeetings
   };
-};
+}

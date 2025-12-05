@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -10,6 +10,9 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { RecipientSelector } from "@/components/RecipientSelector";
+import { supabaseStorage } from "@/services/SupabaseStorageService";
+import { useSupabaseRealTimeDocuments } from "@/hooks/useSupabaseRealTimeDocuments";
+import { getRecipientName } from "@/utils/recipientUtils";
 import { 
   AlertTriangle, 
   Siren, 
@@ -75,90 +78,11 @@ interface EmergencyWorkflowInterfaceProps {
   userRole: string;
 }
 
-// Helper function to convert recipient IDs to names
-const getRecipientName = (recipientId: string) => {
-  // Map of common recipient IDs to their display names
-  const recipientMap: { [key: string]: string } = {
-    // Leadership
-    'principal-dr.-robert-principal': 'Dr. Robert Principal',
-    'registrar-prof.-sarah-registrar': 'Prof. Sarah Registrar',
-    'dean-dr.-maria-dean': 'Dr. Maria Dean',
-    'chairman-mr.-david-chairman': 'Mr. David Chairman',
-    'director-(for-information)-ms.-lisa-director': 'Ms. Lisa Director',
-    'leadership-prof.-leadership-officer': 'Prof. Leadership Officer',
-    
-    // CDC Employees
-    'cdc-head-dr.-cdc-head': 'Dr. CDC Head',
-    'cdc-coordinator-prof.-cdc-coordinator': 'Prof. CDC Coordinator',
-    'cdc-executive-ms.-cdc-executive': 'Ms. CDC Executive',
-    
-    // Administrative
-    'controller-of-examinations-dr.-robert-controller': 'Dr. Robert Controller',
-    'asst.-dean-iiic-prof.-asst-dean': 'Prof. Asst Dean',
-    'head-operations-mr.-michael-operations': 'Mr. Michael Operations',
-    'librarian-ms.-jennifer-librarian': 'Ms. Jennifer Librarian',
-    'ssg-prof.-william-ssg': 'Prof. William SSG',
-    
-    // HODs
-    'hod-dr.-eee-hod-eee': 'Dr. EEE HOD',
-    'hod-dr.-mech-hod-mech': 'Dr. MECH HOD',
-    'hod-dr.-cse-hod-cse': 'Dr. CSE HOD',
-    'hod-dr.-ece-hod-ece': 'Dr. ECE HOD',
-    'hod-dr.-csm-hod-csm': 'Dr. CSM HOD',
-    'hod-dr.-cso-hod-cso': 'Dr. CSO HOD',
-    'hod-dr.-csd-hod-csd': 'Dr. CSD HOD',
-    'hod-dr.-csc-hod-csc': 'Dr. CSC HOD',
-    
-    // Program Department Heads
-    'program-department-head-prof.-eee-head-eee': 'Prof. EEE Head',
-    'program-department-head-prof.-mech-head-mech': 'Prof. MECH Head',
-    'program-department-head-prof.-cse-head-cse': 'Prof. CSE Head',
-    'program-department-head-prof.-ece-head-ece': 'Prof. ECE Head',
-    'program-department-head-prof.-csm-head-csm': 'Prof. CSM Head',
-    'program-department-head-prof.-cso-head-cso': 'Prof. CSO Head',
-    'program-department-head-prof.-csd-head-csd': 'Prof. CSD Head',
-    'program-department-head-prof.-csc-head-csc': 'Prof. CSC Head'
-  };
-  
-  // If we have a mapping, use it
-  if (recipientMap[recipientId]) {
-    return recipientMap[recipientId];
-  }
-  
-  // Otherwise, try to extract the name from the ID
-  // IDs are typically formatted like: 'role-name-branch-year'
-  // e.g., 'faculty-dr.-cse-faculty-cse-1st'
-  const parts = recipientId.split('-');
-  
-  // Try to find name pattern (usually contains Dr., Prof., Mr., Ms., etc.)
-  let name = '';
-  for (let i = 0; i < parts.length; i++) {
-    if (parts[i].match(/^(dr\.|prof\.|mr\.|ms\.|dr|prof|mr|ms)$/i)) {
-      // Found a title, collect the name parts
-      const titleIndex = i;
-      name = parts.slice(titleIndex).join(' ');
-      // Clean up and capitalize
-      name = name.replace(/-/g, ' ')
-                .split(' ')
-                .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
-                .join(' ');
-      break;
-    }
-  }
-  
-  // If we couldn't extract a proper name, use the whole ID cleaned up
-  if (!name) {
-    name = recipientId.replace(/-/g, ' ')
-                     .split(' ')
-                     .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
-                     .join(' ');
-  }
-  
-  return name;
-};
+// getRecipientName is now imported from @/utils/recipientUtils
 
 export const EmergencyWorkflowInterface: React.FC<EmergencyWorkflowInterfaceProps> = ({ userRole }) => {
   const { user } = useAuth();
+  const { isConnected: supabaseConnected, createEmergencyDocument: submitToSupabase } = useSupabaseRealTimeDocuments();
   const [isEmergencyMode, setIsEmergencyMode] = useState(false);
   const [selectedRecipients, setSelectedRecipients] = useState<string[]>([]);
   const [viewingFile, setViewingFile] = useState<File | null>(null);
@@ -290,25 +214,33 @@ export const EmergencyWorkflowInterface: React.FC<EmergencyWorkflowInterfaceProp
     setShowFileViewer(true);
   };
 
+  // Use centralized utility for recipient name formatting
   const formatRecipientName = (recipientId: string) => {
-    // Map recipient IDs to proper names with designations like other cards
-    const recipientMap: {[key: string]: string} = {
-      'cdc-head-dr.-cdc-head': 'Dr. CDC Head',
-      'principal-dr.-robert-principal': 'Dr. Robert Smith',
-      'registrar-prof.-sarah-registrar': 'Prof. Sarah Registrar',
-      'hod-dr.-cse-hod': 'Prof. Michael Chen',
-      'hod-dr.-ece-hod': 'Ms. Lisa Wang',
-      'program-department-head-prof.-cse-head': 'Prof. James Wilson',
-      'dean-dr.-maria-dean': 'Dr. Maria Garcia',
-      'hod-dr.-eee-hod': 'Dr. EEE HOD',
-      'hod-dr.-mech-hod': 'Dr. MECH HOD',
-      'hod-dr.-csm-hod': 'Dr. CSM HOD',
-      'hod-dr.-cso-hod': 'Dr. CSO HOD',
-      'hod-dr.-csd-hod': 'Dr. CSD HOD',
-      'hod-dr.-csc-hod': 'Dr. CSC HOD'
-    };
+    return getRecipientName(recipientId);
+  };
+
+  // Helper function to create emergency channel
+  const createEmergencyChannel = (docId: string, title: string, submitterName: string, recipientIds: string[]) => {
+    console.log('📢 Auto-creating channel for Emergency Management submission...');
     
-    return recipientMap[recipientId] || recipientId.split('-').slice(-2).join(' ').replace(/\./g, '');
+    try {
+      const recipientNames = recipientIds.map(id => getRecipientName(id));
+      
+      const channel = channelAutoCreationService.createDocumentChannel({
+        documentId: docId,
+        documentTitle: title,
+        submittedBy: user?.id || 'unknown',
+        submittedByName: submitterName,
+        recipients: recipientIds,
+        recipientNames: recipientNames,
+        source: 'Emergency Management',
+        submittedAt: new Date()
+      });
+      
+      console.log('✅ Channel auto-created:', channel.name);
+    } catch (error) {
+      console.error('❌ Failed to auto-create channel:', error);
+    }
   };
 
   const createEmergencyDocumentCard = async (emergencyDoc: any, recipientsToSend: string[]) => {
@@ -637,6 +569,112 @@ export const EmergencyWorkflowInterface: React.FC<EmergencyWorkflowInterfaceProp
       recipients: selectedRecipients.length
     });
     
+    // ========================================
+    // SUPABASE PATH: Use Supabase when connected
+    // ========================================
+    if (supabaseConnected) {
+      console.log('🚀 Using Supabase for emergency submission');
+      
+      try {
+        const recipientNames = selectedRecipients.map(id => getRecipientName(id));
+        
+        // Submit to Supabase
+        const supabaseDoc = await submitToSupabase({
+          trackingId: docId,
+          title: emergencyData.title,
+          description: emergencyData.description,
+          type: 'Emergency',
+          priority: emergencyData.urgencyLevel,
+          recipients: recipientNames,
+          recipientIds: selectedRecipients,
+          routingType: isParallel ? 'parallel' : 'sequential',
+          isEmergency: true,
+          isParallel: isParallel,
+          source: 'emergency-management',
+          metadata: {
+            reason: emergencyData.reason,
+            files: serializedFiles,
+            hasBypass: hasBypass,
+            hasEscalation: hasEscalation,
+            hasCyclicEscalation: hasCyclicEscalation,
+            escalationTimeout: emergencyData.escalationTimeout,
+            escalationTimeUnit: emergencyData.escalationTimeUnit
+          },
+          workflow: trackingCard.workflow
+        });
+
+        console.log('✅ [Supabase] Emergency document created:', supabaseDoc.id);
+
+        // Also save to localStorage for backward compatibility
+        const existingDocs = JSON.parse(localStorage.getItem('submitted-documents') || '[]');
+        const trackingCardWithSupabaseId = { ...trackingCard, supabaseId: supabaseDoc.id };
+        existingDocs.unshift(trackingCardWithSupabaseId);
+        localStorage.setItem('submitted-documents', JSON.stringify(existingDocs));
+
+        // Create localStorage approval card for backward compatibility
+        const approvalCard = {
+          id: docId,
+          title: emergencyData.title,
+          type: 'Emergency',
+          submitter: currentUserName,
+          submittedDate: currentDate,
+          status: 'pending',
+          priority: emergencyData.urgencyLevel,
+          description: emergencyData.description,
+          recipients: recipientNames,
+          recipientIds: selectedRecipients,
+          files: serializedFiles,
+          trackingCardId: docId,
+          isEmergency: true,
+          isParallel: isParallel,
+          hasBypass: hasBypass,
+          hasEscalation: hasEscalation,
+          isCustomAssignment: false,
+          supabaseId: supabaseDoc.id
+        };
+
+        const existingApprovals = JSON.parse(localStorage.getItem('pending-approvals') || '[]');
+        existingApprovals.unshift(approvalCard);
+        localStorage.setItem('pending-approvals', JSON.stringify(existingApprovals));
+
+        // Dispatch events
+        window.dispatchEvent(new CustomEvent('emergency-document-created', { 
+          detail: { document: trackingCardWithSupabaseId } 
+        }));
+        window.dispatchEvent(new CustomEvent('document-approval-created', { 
+          detail: { document: trackingCardWithSupabaseId } 
+        }));
+        window.dispatchEvent(new CustomEvent('approval-card-created', { 
+          detail: { approval: approvalCard } 
+        }));
+
+        // Auto-create channel
+        createEmergencyChannel(docId, emergencyData.title, currentUserName, selectedRecipients);
+
+        toast({
+          title: "Emergency Document Submitted (Supabase)",
+          description: `Urgent notification sent to ${selectedRecipients.length} recipient(s) via real-time sync.`,
+        });
+
+        // Reset form
+        resetEmergencyForm();
+        return;
+      } catch (error) {
+        console.error('❌ Supabase submission failed, falling back to localStorage:', error);
+        toast({
+          title: "Supabase Error",
+          description: "Falling back to local storage. Your emergency document will still be tracked.",
+          variant: "destructive"
+        });
+        // Fall through to localStorage path
+      }
+    }
+
+    // ========================================
+    // LOCALSTORAGE PATH: Fallback when Supabase not connected
+    // ========================================
+    console.log('📦 Using localStorage for emergency submission');
+    
     // Save tracking card
     const existingDocs = JSON.parse(localStorage.getItem('submitted-documents') || '[]');
     existingDocs.unshift(trackingCard);
@@ -767,26 +805,7 @@ export const EmergencyWorkflowInterface: React.FC<EmergencyWorkflowInterfaceProp
     }));
     
     // Auto-create channel
-    console.log('📢 Auto-creating channel for Emergency Management submission...');
-    
-    try {
-      const recipientNames = selectedRecipients.map(id => getRecipientName(id));
-      
-      const channel = channelAutoCreationService.createDocumentChannel({
-        documentId: trackingCard.id,
-        documentTitle: emergencyData.title,
-        submittedBy: user?.id || 'unknown',
-        submittedByName: currentUserName,
-        recipients: selectedRecipients,
-        recipientNames: recipientNames,
-        source: 'Emergency Management',
-        submittedAt: new Date()
-      });
-      
-      console.log('✅ Channel auto-created:', channel.name);
-    } catch (error) {
-      console.error('❌ Failed to auto-create channel:', error);
-    }
+    createEmergencyChannel(docId, emergencyData.title, currentUserName, selectedRecipients);
     
     // Initialize escalation if enabled
     if (hasEscalation) {

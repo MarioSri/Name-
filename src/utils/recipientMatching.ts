@@ -39,6 +39,13 @@ export const isUserInRecipients = (options: RecipientMatchOptions): boolean => {
     recipients: recipients
   });
   
+  // Helper to safely extract string from recipient (handles both string and object)
+  const getRecipientString = (r: any): string => {
+    if (typeof r === 'string') return r;
+    if (r && typeof r === 'object') return r.recipient_name || r.recipient_user_id || r.name || r.userId || '';
+    return '';
+  };
+  
   // If no recipients specified, show to everyone (backward compatibility)
   if ((!recipients || recipients.length === 0) && 
       (!recipientIds || recipientIds.length === 0) && 
@@ -49,12 +56,14 @@ export const isUserInRecipients = (options: RecipientMatchOptions): boolean => {
   
   // Check recipient IDs first (most reliable)
   if (recipientIds && recipientIds.length > 0) {
-    const matchesRecipientId = recipientIds.some((recipientId: string) => {
-      const recipientLower = recipientId.toLowerCase();
+    const matchesRecipientId = recipientIds.some((recipientId: any) => {
+      const recipientStr = getRecipientString(recipientId);
+      if (!recipientStr) return false;
+      const recipientLower = recipientStr.toLowerCase();
       
       // ✅ Check UUID match first (for Supabase recipients)
-      if (user.id && recipientId === user.id) {
-        console.log('✅ [Recipient Matching] UUID match:', recipientId);
+      if (user.id && recipientStr === user.id) {
+        console.log('✅ [Recipient Matching] UUID match:', recipientStr);
         return true;
       }
       
@@ -123,8 +132,10 @@ export const isUserInRecipients = (options: RecipientMatchOptions): boolean => {
   
   // Check display names (legacy support)
   if (recipients && recipients.length > 0) {
-    const matchesDisplayName = recipients.some((recipient: string) => {
-      const recipientLower = recipient.toLowerCase();
+    const matchesDisplayName = recipients.some((recipient: any) => {
+      const recipientStr = getRecipientString(recipient);
+      if (!recipientStr) return false;
+      const recipientLower = recipientStr.toLowerCase();
       
       return (
         // Direct name match (partial)

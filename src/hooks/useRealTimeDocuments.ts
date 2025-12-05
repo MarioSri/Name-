@@ -1,12 +1,13 @@
 /**
  * React hook for real-time document management
+ * NOW USING SUPABASE - NO MORE localStorage
  * Integrates Track Documents, Approval Center, Document Management, Emergency Management, and Approval Chain
  */
 
 import { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
 import { realTimeDocumentService, DocumentData } from '@/services/RealTimeDocumentService';
-import { isUserInRecipients } from '@/utils/recipientMatching';
+import { supabaseDocumentService } from '@/services/SupabaseDocumentService';
 
 export interface UseRealTimeDocumentsReturn {
   // Data
@@ -20,6 +21,7 @@ export interface UseRealTimeDocumentsReturn {
   approveDocument: (documentId: string, comments?: string) => Promise<void>;
   rejectDocument: (documentId: string, reason: string) => Promise<void>;
   updateRecipients: (documentId: string, recipients: string[], recipientIds: string[]) => Promise<void>;
+  refetch: () => Promise<void>;
   
   // State
   loading: boolean;
@@ -33,126 +35,121 @@ export const useRealTimeDocuments = (): UseRealTimeDocumentsReturn => {
   const { user } = useAuth();
   const [trackDocuments, setTrackDocuments] = useState<DocumentData[]>([]);
   const [approvalCards, setApprovalCards] = useState<DocumentData[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isConnected, setIsConnected] = useState(false);
 
-  // Load initial data
-  const loadData = useCallback(() => {
-    try {
-      // Load track documents (filtered for current user as submitter only)
-      const storedTrackDocs = JSON.parse(localStorage.getItem('submitted-documents') || '[]');
-      const filteredTrackDocs = storedTrackDocs.filter((doc: DocumentData) => {
-        if (!user) return false;
-        
-        // Only show documents where current user is the submitter
-        const isSubmitter = (
-          doc.submitter === user.name ||
-          doc.submitter === user.role ||
-          (doc as any).submittedBy === user.name ||
-          (doc as any).submittedByRole === user.role ||
-          (doc as any).submittedByDesignation === user.role
-        );
-        
-        return isSubmitter;
-      });
-      
-      setTrackDocuments(filteredTrackDocs);
+  // Load data from Supabase
+  const loadData = useCallback(async () => {
+    if (!user) {
+      setTrackDocuments([]);
+      setApprovalCards([]);
+      setLoading(false);
+      return;
+    }
 
-      // Load approval cards (filtered for current user as recipient)
-      const storedApprovalCards = JSON.parse(localStorage.getItem('pending-approvals') || '[]');
-      const filteredCards = storedApprovalCards.filter((card: DocumentData) => {
-        if (!user) return false;
-        
-        return isUserInRecipients({
-          user: {
-            id: user.id,
-            name: user.name,
-            role: user.role,
-            department: user.department,
-            branch: user.branch
-          },
-          recipients: card.recipients,
-          recipientIds: card.recipientIds,
-          workflowSteps: card.workflow?.steps
-        });
-      });
-      
-      setApprovalCards(filteredCards);
+    try {
+      setLoading(true);
+      setError(null);
+
+      // Load track documents from Supabase (documents submitted by current user)
+      const docs = await realTimeDocumentService.getDocumentsBySubmitter(user.id);
+      setTrackDocuments(docs);
+      console.log(`✅ Loaded ${docs.length} tracking documents for:`, user.name);
+
+      // Load approval cards from Supabase (approvals for current user)
+      const approvals = await realTimeDocumentService.getApprovalCardsForRecipient(user.id);
+      setApprovalCards(approvals);
+      console.log(`✅ Loaded ${approvals.length} approval cards for:`, user.name);
+
+      setIsConnected(true);
     } catch (err) {
-      console.error('Error loading documents:', err);
+      console.error('❌ Error loading documents from Supabase:', err);
       setError('Failed to load documents');
+      setIsConnected(false);
+    } finally {
+      setLoading(false);
     }
   }, [user]);
 
+  // Refetch data
+  const refetch = useCallback(async () => {
+    await loadData();
+  }, [loadData]);
+
   // Real-time event handlers
   useEffect(() => {
-    const handleDocumentSubmitted = (event: CustomEvent) => {
-      console.log('📄 Document submitted:', event.detail);
+    const handleDocumentSubmitted = () => {
+      console.log('📄 Document submitted - reloading');
       loadData();
     };
 
-    const handleDocumentApproved = (event: CustomEvent) => {
-      console.log('✅ Document approved:', event.detail);
+    const handleDocumentApproved = () => {
+      console.log('✅ Document approved - reloading');
       loadData();
     };
 
-    const handleDocumentRejected = (event: CustomEvent) => {
-      console.log('❌ Document rejected:', event.detail);
+    const handleDocumentRejected = () => {
+      console.log('❌ Document rejected - reloading');
       loadData();
     };
 
-    const handleEmergencyDocument = (event: CustomEvent) => {
-      console.log('🚨 Emergency document:', event.detail);
+    const handleEmergencyDocument = () => {
+      console.log('🚨 Emergency document - reloading');
       loadData();
     };
 
-    const handleApprovalChainCreated = (event: CustomEvent) => {
-      console.log('🔗 Approval chain created:', event.detail);
+    const handleApprovalChainCreated = () => {
+      console.log('🔗 Approval chain created - reloading');
       loadData();
     };
 
-    const handleRecipientsUpdated = (event: CustomEvent) => {
-      console.log('👥 Recipients updated:', event.detail);
+    const handleRecipientsUpdated = () => {
+      console.log('👥 Recipients updated - reloading');
       loadData();
     };
 
-    // Storage events for cross-tab synchronization
-    const handleStorageChange = (event: StorageEvent) => {
-      if (event.key === 'submitted-documents' || event.key === 'pending-approvals') {
-        console.log('💾 Storage changed:', event.key);
-        loadData();
-      }
+    const handleSupabaseChange = () => {
+      console.log('📡 Supabase change detected - reloading');
+      loadData();
     };
 
-    // Register event listeners
-    window.addEventListener('document-submitted', handleDocumentSubmitted as EventListener);
-    window.addEventListener('document-approved', handleDocumentApproved as EventListener);
-    window.addEventListener('document-rejected', handleDocumentRejected as EventListener);
-    window.addEventListener('emergency-document-created', handleEmergencyDocument as EventListener);
-    window.addEventListener('approval-chain-created', handleApprovalChainCreated as EventListener);
-    window.addEventListener('recipients-updated', handleRecipientsUpdated as EventListener);
-    window.addEventListener('document-approval-created', () => loadData() as any);
-    window.addEventListener('approval-card-created', () => loadData() as any);
-    window.addEventListener('storage', handleStorageChange);
+    // Register event listeners for window events
+    window.addEventListener('document-submitted', handleDocumentSubmitted);
+    window.addEventListener('document-approved', handleDocumentApproved);
+    window.addEventListener('document-rejected', handleDocumentRejected);
+    window.addEventListener('emergency-document-created', handleEmergencyDocument);
+    window.addEventListener('approval-chain-created', handleApprovalChainCreated);
+    window.addEventListener('recipients-updated', handleRecipientsUpdated);
+    window.addEventListener('supabase-change', handleSupabaseChange);
+    window.addEventListener('approval-change', handleSupabaseChange);
 
     // Real-time service events
     realTimeDocumentService.on('document-created', loadData);
     realTimeDocumentService.on('document-updated', loadData);
     realTimeDocumentService.on('approval-required', loadData);
+    realTimeDocumentService.on('supabase-change', loadData);
+    realTimeDocumentService.on('approval-change', loadData);
+
+    // Subscribe to Supabase realtime
+    const docSubscription = supabaseDocumentService.subscribeToDocuments(() => loadData());
+    const approvalSubscription = supabaseDocumentService.subscribeToApprovals(() => loadData());
 
     return () => {
-      window.removeEventListener('document-submitted', handleDocumentSubmitted as EventListener);
-      window.removeEventListener('document-approved', handleDocumentApproved as EventListener);
-      window.removeEventListener('document-rejected', handleDocumentRejected as EventListener);
-      window.removeEventListener('emergency-document-created', handleEmergencyDocument as EventListener);
-      window.removeEventListener('approval-chain-created', handleApprovalChainCreated as EventListener);
-      window.removeEventListener('recipients-updated', handleRecipientsUpdated as EventListener);
-      window.removeEventListener('document-approval-created', () => loadData() as any);
-      window.removeEventListener('approval-card-created', () => loadData() as any);
-      window.removeEventListener('storage', handleStorageChange);
+      window.removeEventListener('document-submitted', handleDocumentSubmitted);
+      window.removeEventListener('document-approved', handleDocumentApproved);
+      window.removeEventListener('document-rejected', handleDocumentRejected);
+      window.removeEventListener('emergency-document-created', handleEmergencyDocument);
+      window.removeEventListener('approval-chain-created', handleApprovalChainCreated);
+      window.removeEventListener('recipients-updated', handleRecipientsUpdated);
+      window.removeEventListener('supabase-change', handleSupabaseChange);
+      window.removeEventListener('approval-change', handleSupabaseChange);
+      
+      // Cleanup Supabase subscriptions
+      docSubscription.unsubscribe();
+      approvalSubscription.unsubscribe();
     };
-  }, [loadData]);
+  }, [loadData, user]);
 
   // Load data on mount and user change
   useEffect(() => {
@@ -275,6 +272,7 @@ export const useRealTimeDocuments = (): UseRealTimeDocumentsReturn => {
     approveDocument,
     rejectDocument,
     updateRecipients,
+    refetch: loadData,
     
     // State
     loading,

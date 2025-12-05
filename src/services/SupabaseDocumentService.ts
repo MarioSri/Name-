@@ -1,561 +1,505 @@
 /**
  * Supabase Document Service
- * Handles all document-related database operations with real-time support
- * Replaces localStorage['submitted-documents'] and localStorage['pending-approvals']
+ * Handles documents, tracking, and approval cards
  */
 
 import { supabase } from '@/lib/supabase';
-import type { RealtimeChannel } from '@supabase/supabase-js';
+import { realtimeService, RealtimeSubscription } from './SupabaseRealtimeService';
 
-export interface DocumentData {
-  id?: string;
-  document_id: string;
+export interface Document {
+  id: string;
+  tracking_id: string;
   title: string;
+  description?: string;
   type: string;
-  submitter_id?: string;
+  priority: string;
+  status: string;
+  submitter_id: string;
   submitter_name: string;
-  submitted_date?: string;
-  priority: 'low' | 'normal' | 'high' | 'critical';
-  description: string;
+  submitter_role?: string;
   recipients: string[];
   recipient_ids: string[];
-  workflow?: {
-    steps: Array<{
-      name: string;
-      assignee: string;
-      status: 'pending' | 'current' | 'completed' | 'rejected' | 'bypassed';
-      completedDate?: string;
-    }>;
-    currentStep: string;
-    progress: number;
-    isParallel?: boolean;
-    hasBypass?: boolean;
-  };
-  source: 'document-management' | 'emergency-management' | 'approval-chain-bypass';
-  routing_type?: 'sequential' | 'parallel' | 'reverse' | 'bidirectional';
-  is_emergency?: boolean;
-  is_parallel?: boolean;
-  status: 'pending' | 'approved' | 'rejected' | 'partially-approved';
-  signed_by?: string[];
-  rejected_by?: string[];
-  files?: any[];
-  metadata?: any;
-  created_at?: string;
-  updated_at?: string;
+  routing_type: string;
+  is_emergency: boolean;
+  is_parallel: boolean;
+  source: string;
+  file_url?: string;
+  file_name?: string;
+  file_size?: number;
+  metadata: any;
+  workflow: any;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface ApprovalCard {
-  id?: string;
+  id: string;
   approval_id: string;
   tracking_card_id: string;
-  document_id: string;
+  document_id?: string;
   title: string;
+  description?: string;
   type: string;
-  submitter_name: string;
-  submitter_id?: string;
-  submitted_date?: string;
   priority: string;
-  description: string;
+  status: string;
+  submitter: string;
+  submitter_id?: string;
   recipients: string[];
   recipient_ids: string[];
-  workflow?: any;
+  current_recipient_id?: string;
+  routing_type: string;
+  is_emergency: boolean;
+  is_parallel: boolean;
   source: string;
-  routing_type?: string;
-  is_emergency?: boolean;
-  is_parallel?: boolean;
-  status: string;
-  files?: any[];
-  metadata?: any;
+  workflow: any;
+  approval_history: any[];
+  comments?: string;
+  created_at: string;
+  updated_at: string;
 }
 
 class SupabaseDocumentService {
-  private documentChannel: RealtimeChannel | null = null;
-  private approvalChannel: RealtimeChannel | null = null;
-
-  // =====================================================
-  // SUBMITTED DOCUMENTS OPERATIONS
-  // =====================================================
+  // ==================== DOCUMENTS ====================
 
   /**
-   * Create a new submitted document
+   * Create a new document (using normalized schema)
    */
-  async createDocument(document: DocumentData): Promise<DocumentData> {
-    try {
-      const { data, error } = await supabase
-        .from('submitted_documents')
-        .insert([{
-          document_id: document.document_id,
-          title: document.title,
-          type: document.type,
-          submitter_id: document.submitter_id,
-          submitter_name: document.submitter_name,
-          submitted_date: document.submitted_date || new Date().toISOString(),
-          priority: document.priority,
-          description: document.description,
-          recipients: document.recipients,
-          recipient_ids: document.recipient_ids,
-          workflow: document.workflow,
-          source: document.source,
-          routing_type: document.routing_type,
-          is_emergency: document.is_emergency,
-          is_parallel: document.is_parallel,
-          status: document.status,
-          signed_by: document.signed_by || [],
-          rejected_by: document.rejected_by || [],
-          files: document.files,
-          metadata: document.metadata
-        }])
-        .select()
-        .single();
+  async createDocument(
+    doc: Partial<Document>,
+    recipientDetails?: { id: string; userId: string; name: string }[]
+  ): Promise<Document> {
+    const trackingId = doc.tracking_id || `DOC-${Date.now()}`;
+    
+    const { data, error } = await supabase
+      .from('documents')
+      .insert({
+        tracking_id: trackingId,
+        title: doc.title,
+        description: doc.description,
+        type: doc.type || 'Letter',
+        priority: doc.priority || 'normal',
+        status: 'pending',
+        submitter_id: doc.submitter_id,
+        submitter_name: doc.submitter_name,
+        submitter_role: doc.submitter_role,
+        routing_type: doc.routing_type || 'sequential',
+        is_emergency: doc.is_emergency || false,
+        is_parallel: doc.is_parallel || false,
+        source: doc.source || 'document-management',
+        file_url: doc.file_url,
+        file_name: doc.file_name,
+        file_size: doc.file_size,
+        metadata: doc.metadata || {},
+        workflow: doc.workflow || {},
+      })
+      .select()
+      .single();
 
-      if (error) throw error;
-
-      console.log('✅ Document created in Supabase:', data.document_id);
-      return data as DocumentData;
-    } catch (error) {
+    if (error) {
       console.error('❌ Error creating document:', error);
       throw error;
     }
-  }
 
-  /**
-   * Get documents submitted by a specific user
-   */
-  async getDocumentsBySubmitter(submitterId: string): Promise<DocumentData[]> {
-    try {
-      const { data, error } = await supabase
-        .from('submitted_documents')
-        .select('*')
-        .eq('submitter_id', submitterId)
-        .order('submitted_date', { ascending: false });
+    // Add recipients to junction table
+    if (recipientDetails && recipientDetails.length > 0) {
+      const recipientRecords = recipientDetails.map((r, index) => ({
+        document_id: data.id,
+        recipient_id: r.id,
+        recipient_user_id: r.userId,
+        recipient_name: r.name,
+        order_index: index,
+        status: 'pending',
+      }));
 
-      if (error) throw error;
-      return data as DocumentData[];
-    } catch (error) {
-      console.error('❌ Error fetching documents:', error);
-      return [];
+      const { error: junctionError } = await supabase
+        .from('document_recipients')
+        .insert(recipientRecords);
+
+      if (junctionError) {
+        console.error('❌ Error adding document recipients:', junctionError);
+      }
     }
+
+    console.log('✅ Document created:', data.tracking_id);
+    return data;
   }
 
   /**
-   * Get all documents (for admin/principal)
+   * Get document by tracking ID (with recipients)
    */
-  async getAllDocuments(): Promise<DocumentData[]> {
-    try {
-      const { data, error } = await supabase
-        .from('submitted_documents')
-        .select('*')
-        .order('submitted_date', { ascending: false });
+  async getDocumentByTrackingId(trackingId: string): Promise<Document | null> {
+    const { data, error } = await supabase
+      .from('documents')
+      .select(`
+        *,
+        recipients:document_recipients(*)
+      `)
+      .eq('tracking_id', trackingId)
+      .single();
 
-      if (error) throw error;
-      return data as DocumentData[];
-    } catch (error) {
-      console.error('❌ Error fetching all documents:', error);
-      return [];
-    }
-  }
-
-  /**
-   * Get a single document by ID
-   */
-  async getDocumentById(documentId: string): Promise<DocumentData | null> {
-    try {
-      const { data, error } = await supabase
-        .from('submitted_documents')
-        .select('*')
-        .eq('document_id', documentId)
-        .single();
-
-      if (error) throw error;
-      return data as DocumentData;
-    } catch (error) {
+    if (error && error.code !== 'PGRST116') {
       console.error('❌ Error fetching document:', error);
-      return null;
-    }
-  }
-
-  /**
-   * Update a document
-   */
-  async updateDocument(documentId: string, updates: Partial<DocumentData>): Promise<DocumentData | null> {
-    try {
-      const { data, error } = await supabase
-        .from('submitted_documents')
-        .update(updates)
-        .eq('document_id', documentId)
-        .select()
-        .single();
-
-      if (error) throw error;
-
-      console.log('✅ Document updated:', documentId);
-      return data as DocumentData;
-    } catch (error) {
-      console.error('❌ Error updating document:', error);
-      return null;
-    }
-  }
-
-  /**
-   * Update document workflow
-   */
-  async updateWorkflow(documentId: string, workflow: any): Promise<void> {
-    try {
-      const { error } = await supabase
-        .from('submitted_documents')
-        .update({ workflow })
-        .eq('document_id', documentId);
-
-      if (error) throw error;
-
-      console.log('✅ Workflow updated for document:', documentId);
-    } catch (error) {
-      console.error('❌ Error updating workflow:', error);
       throw error;
     }
+
+    return data;
+  }
+
+  /**
+   * Get documents by submitter (with recipients)
+   */
+  async getDocumentsBySubmitter(submitterId: string): Promise<Document[]> {
+    const { data, error } = await supabase
+      .from('documents')
+      .select(`
+        *,
+        doc_recipients:document_recipients(*)
+      `)
+      .eq('submitter_id', submitterId)
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      console.error('❌ Error fetching documents:', error);
+      throw error;
+    }
+
+    // Convert doc_recipients to flat arrays for backward compatibility
+    return (data || []).map(doc => ({
+      ...doc,
+      recipients: doc.doc_recipients?.map((r: any) => r.recipient_name) || [],
+      recipient_ids: doc.doc_recipients?.map((r: any) => r.recipient_user_id) || [],
+    }));
+  }
+
+  /**
+   * Get all documents (with recipients)
+   */
+  async getAllDocuments(): Promise<Document[]> {
+    const { data, error } = await supabase
+      .from('documents')
+      .select(`
+        *,
+        doc_recipients:document_recipients(*)
+      `)
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      console.error('❌ Error fetching documents:', error);
+      throw error;
+    }
+
+    // Convert doc_recipients to flat arrays for backward compatibility
+    return (data || []).map(doc => ({
+      ...doc,
+      recipients: doc.doc_recipients?.map((r: any) => r.recipient_name) || [],
+      recipient_ids: doc.doc_recipients?.map((r: any) => r.recipient_user_id) || [],
+    }));
   }
 
   /**
    * Update document status
    */
-  async updateDocumentStatus(
-    documentId: string, 
-    status: 'pending' | 'approved' | 'rejected' | 'partially-approved'
-  ): Promise<void> {
-    try {
-      const { error } = await supabase
-        .from('submitted_documents')
-        .update({ status })
-        .eq('document_id', documentId);
+  async updateDocumentStatus(trackingId: string, status: string): Promise<Document> {
+    const { data, error } = await supabase
+      .from('documents')
+      .update({
+        status,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('tracking_id', trackingId)
+      .select()
+      .single();
 
-      if (error) throw error;
-
-      console.log('✅ Document status updated:', documentId, status);
-    } catch (error) {
+    if (error) {
       console.error('❌ Error updating document status:', error);
       throw error;
     }
+
+    console.log('✅ Document status updated:', trackingId, status);
+    return data;
   }
 
   /**
-   * Add signature to document
+   * Update document
    */
-  async addSignature(documentId: string, signerName: string): Promise<void> {
-    try {
-      // Get current document
-      const doc = await this.getDocumentById(documentId);
-      if (!doc) throw new Error('Document not found');
+  async updateDocument(trackingId: string, updates: Partial<Document>): Promise<Document> {
+    const { data, error } = await supabase
+      .from('documents')
+      .update({
+        ...updates,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('tracking_id', trackingId)
+      .select()
+      .single();
 
-      const signedBy = [...(doc.signed_by || []), signerName];
-
-      const { error } = await supabase
-        .from('submitted_documents')
-        .update({ signed_by: signedBy })
-        .eq('document_id', documentId);
-
-      if (error) throw error;
-
-      console.log('✅ Signature added:', signerName);
-    } catch (error) {
-      console.error('❌ Error adding signature:', error);
+    if (error) {
+      console.error('❌ Error updating document:', error);
       throw error;
     }
+
+    return data;
   }
 
+  // ==================== APPROVAL CARDS ====================
+
   /**
-   * Add rejection to document
+   * Create approval cards for document recipients
    */
-  async addRejection(documentId: string, rejectorName: string): Promise<void> {
-    try {
-      const doc = await this.getDocumentById(documentId);
-      if (!doc) throw new Error('Document not found');
+  async createApprovalCards(document: Document): Promise<ApprovalCard[]> {
+    const cards: ApprovalCard[] = [];
+    const recipientIds = document.recipient_ids || [];
+    const recipients = document.recipients || [];
 
-      const rejectedBy = [...(doc.rejected_by || []), rejectorName];
-
-      const { error } = await supabase
-        .from('submitted_documents')
-        .update({ rejected_by: rejectedBy })
-        .eq('document_id', documentId);
-
-      if (error) throw error;
-
-      console.log('✅ Rejection added:', rejectorName);
-    } catch (error) {
-      console.error('❌ Error adding rejection:', error);
-      throw error;
+    if (document.is_parallel || document.routing_type === 'parallel') {
+      // Create cards for all recipients at once
+      for (let i = 0; i < recipientIds.length; i++) {
+        const card = await this.createApprovalCard({
+          tracking_card_id: document.tracking_id,
+          document_id: document.id,
+          title: document.title,
+          description: document.description,
+          type: document.type,
+          priority: document.priority,
+          submitter: document.submitter_name,
+          submitter_id: document.submitter_id,
+          recipients,
+          recipient_ids: recipientIds,
+          current_recipient_id: recipientIds[i],
+          routing_type: document.routing_type,
+          is_emergency: document.is_emergency,
+          is_parallel: true,
+          source: document.source,
+          workflow: document.workflow,
+        });
+        cards.push(card);
+      }
+    } else {
+      // Sequential: create card for first recipient only
+      if (recipientIds.length > 0) {
+        const card = await this.createApprovalCard({
+          tracking_card_id: document.tracking_id,
+          document_id: document.id,
+          title: document.title,
+          description: document.description,
+          type: document.type,
+          priority: document.priority,
+          submitter: document.submitter_name,
+          submitter_id: document.submitter_id,
+          recipients,
+          recipient_ids: recipientIds,
+          current_recipient_id: recipientIds[0],
+          routing_type: document.routing_type,
+          is_emergency: document.is_emergency,
+          is_parallel: false,
+          source: document.source,
+          workflow: document.workflow,
+        });
+        cards.push(card);
+      }
     }
+
+    return cards;
   }
 
-  // =====================================================
-  // APPROVAL CARDS OPERATIONS
-  // =====================================================
-
   /**
-   * Create approval cards for recipients
+   * Create single approval card
    */
-  async createApprovalCards(document: DocumentData): Promise<void> {
-    try {
-      const approvalCard: ApprovalCard = {
-        approval_id: `approval-${document.document_id}`,
-        tracking_card_id: document.document_id,
-        document_id: document.document_id,
-        title: document.title,
-        type: document.type,
-        submitter_name: document.submitter_name,
-        submitter_id: document.submitter_id,
-        submitted_date: document.submitted_date,
-        priority: document.priority,
-        description: document.description,
-        recipients: document.recipients,
-        recipient_ids: document.recipient_ids,
-        workflow: document.workflow,
-        source: document.source,
-        routing_type: document.routing_type,
-        is_emergency: document.is_emergency,
-        is_parallel: document.is_parallel,
+  async createApprovalCard(card: Partial<ApprovalCard>): Promise<ApprovalCard> {
+    const { data, error } = await supabase
+      .from('approval_cards')
+      .insert({
+        approval_id: card.approval_id || `approval-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+        tracking_card_id: card.tracking_card_id,
+        document_id: card.document_id,
+        title: card.title,
+        description: card.description,
+        type: card.type || 'Letter',
+        priority: card.priority || 'normal',
         status: 'pending',
-        files: document.files,
-        metadata: document.metadata
-      };
+        submitter: card.submitter,
+        submitter_id: card.submitter_id,
+        recipients: card.recipients || [],
+        recipient_ids: card.recipient_ids || [],
+        current_recipient_id: card.current_recipient_id,
+        routing_type: card.routing_type || 'sequential',
+        is_emergency: card.is_emergency || false,
+        is_parallel: card.is_parallel || false,
+        source: card.source || 'document-management',
+        workflow: card.workflow || {},
+        approval_history: [],
+      })
+      .select()
+      .single();
 
-      const { error } = await supabase
-        .from('pending_approvals')
-        .insert([approvalCard]);
-
-      if (error) throw error;
-
-      console.log('✅ Approval cards created for:', document.recipient_ids.length, 'recipients');
-    } catch (error) {
-      console.error('❌ Error creating approval cards:', error);
+    if (error) {
+      console.error('❌ Error creating approval card:', error);
       throw error;
     }
+
+    console.log('✅ Approval card created:', data.approval_id);
+    return data;
   }
 
   /**
-   * Get approval cards for a specific recipient
+   * Get approvals by recipient
    */
   async getApprovalsByRecipient(recipientId: string): Promise<ApprovalCard[]> {
-    try {
-      const { data, error } = await supabase
-        .from('pending_approvals')
-        .select('*')
-        .contains('recipient_ids', [recipientId])
-        .order('submitted_date', { ascending: false });
+    const { data, error } = await supabase
+      .from('approval_cards')
+      .select('*')
+      .or(`current_recipient_id.eq.${recipientId},recipient_ids.cs.{${recipientId}}`)
+      .order('created_at', { ascending: false });
 
-      if (error) throw error;
-
-      console.log(`✅ Found ${data?.length || 0} approval cards for recipient:`, recipientId);
-      return data as ApprovalCard[];
-    } catch (error) {
+    if (error) {
       console.error('❌ Error fetching approvals:', error);
-      return [];
+      throw error;
     }
+
+    return data || [];
   }
 
   /**
-   * Get all approval cards
+   * Get pending approvals by recipient
    */
-  async getAllApprovals(): Promise<ApprovalCard[]> {
-    try {
-      const { data, error } = await supabase
-        .from('pending_approvals')
-        .select('*')
-        .order('submitted_date', { ascending: false });
+  async getPendingApprovalsByRecipient(recipientId: string): Promise<ApprovalCard[]> {
+    // Get cards where this user is the current recipient
+    const { data: directCards, error: directError } = await supabase
+      .from('approval_cards')
+      .select(`
+        *,
+        card_recipients:approval_card_recipients(*)
+      `)
+      .eq('current_recipient_id', recipientId)
+      .eq('status', 'pending')
+      .order('created_at', { ascending: false });
 
-      if (error) throw error;
-      return data as ApprovalCard[];
-    } catch (error) {
-      console.error('❌ Error fetching all approvals:', error);
-      return [];
+    if (directError) {
+      console.error('❌ Error fetching direct pending approvals:', directError);
+      throw directError;
     }
+
+    // Also get cards where this user is in the recipients list (for parallel routing)
+    const { data: recipientCards, error: recipientError } = await supabase
+      .from('approval_card_recipients')
+      .select(`
+        approval_card:approval_cards(
+          *,
+          card_recipients:approval_card_recipients(*)
+        )
+      `)
+      .eq('recipient_user_id', recipientId)
+      .eq('status', 'pending');
+
+    if (recipientError) {
+      console.error('❌ Error fetching recipient pending approvals:', recipientError);
+      // Don't fail - just use direct cards
+    }
+
+    // Combine and deduplicate
+    const allCards = [...(directCards || [])];
+    const directIds = new Set(allCards.map(c => c.id));
+    
+    recipientCards?.forEach(rc => {
+      if (rc.approval_card && !directIds.has(rc.approval_card.id)) {
+        allCards.push(rc.approval_card);
+      }
+    });
+
+    // Convert card_recipients to flat arrays for backward compatibility
+    return allCards.map(card => ({
+      ...card,
+      recipients: card.card_recipients?.map((r: any) => r.recipient_name) || [],
+      recipient_ids: card.card_recipients?.map((r: any) => r.recipient_user_id) || [],
+    }));
   }
 
   /**
-   * Update approval card status
+   * Update approval status
    */
-  async updateApprovalStatus(approvalId: string, status: string): Promise<void> {
-    try {
-      const { error } = await supabase
-        .from('pending_approvals')
-        .update({ status })
-        .eq('approval_id', approvalId);
+  async updateApprovalStatus(approvalId: string, status: string): Promise<ApprovalCard> {
+    const { data, error } = await supabase
+      .from('approval_cards')
+      .update({
+        status,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('approval_id', approvalId)
+      .select()
+      .single();
 
-      if (error) throw error;
-
-      console.log('✅ Approval status updated:', approvalId, status);
-    } catch (error) {
+    if (error) {
       console.error('❌ Error updating approval status:', error);
       throw error;
     }
+
+    console.log('✅ Approval status updated:', approvalId, status);
+    return data;
   }
 
   /**
-   * Delete approval card (after approval/rejection)
+   * Delete approval card
    */
   async deleteApprovalCard(approvalId: string): Promise<void> {
-    try {
-      const { error } = await supabase
-        .from('pending_approvals')
-        .delete()
-        .eq('approval_id', approvalId);
+    const { error } = await supabase
+      .from('approval_cards')
+      .delete()
+      .eq('approval_id', approvalId);
 
-      if (error) throw error;
-
-      console.log('✅ Approval card deleted:', approvalId);
-    } catch (error) {
+    if (error) {
       console.error('❌ Error deleting approval card:', error);
       throw error;
     }
+
+    console.log('✅ Approval card deleted:', approvalId);
   }
 
   /**
-   * Delete approval cards by tracking card ID
+   * Delete approvals by tracking ID
    */
   async deleteApprovalsByTrackingId(trackingCardId: string): Promise<void> {
-    try {
-      const { error } = await supabase
-        .from('pending_approvals')
-        .delete()
-        .eq('tracking_card_id', trackingCardId);
+    const { error } = await supabase
+      .from('approval_cards')
+      .delete()
+      .eq('tracking_card_id', trackingCardId);
 
-      if (error) throw error;
-
-      console.log('✅ Approval cards deleted for tracking card:', trackingCardId);
-    } catch (error) {
-      console.error('❌ Error deleting approval cards:', error);
+    if (error) {
+      console.error('❌ Error deleting approvals:', error);
       throw error;
     }
+
+    console.log('✅ Approvals deleted for tracking card:', trackingCardId);
   }
 
-  // =====================================================
-  // REAL-TIME SUBSCRIPTIONS
-  // =====================================================
+  // ==================== REALTIME SUBSCRIPTIONS ====================
 
   /**
-   * Subscribe to document changes
+   * Subscribe to documents
    */
-  subscribeToDocuments(callback: (payload: any) => void): RealtimeChannel {
-    this.documentChannel = supabase
-      .channel('submitted_documents_changes')
-      .on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'submitted_documents'
-        },
-        (payload) => {
-          console.log('📡 Document change detected:', payload);
-          callback(payload);
-        }
-      )
-      .subscribe();
-
-    console.log('🔔 Subscribed to document changes');
-    return this.documentChannel;
+  subscribeToDocuments(callback: (payload: any) => void): RealtimeSubscription {
+    return realtimeService.subscribe<Document>({
+      table: 'documents',
+      onChange: callback,
+    });
   }
 
   /**
-   * Subscribe to approval card changes
+   * Subscribe to approvals
    */
-  subscribeToApprovals(callback: (payload: any) => void): RealtimeChannel {
-    this.approvalChannel = supabase
-      .channel('pending_approvals_changes')
-      .on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'pending_approvals'
-        },
-        (payload) => {
-          console.log('📡 Approval change detected:', payload);
-          callback(payload);
-        }
-      )
-      .subscribe();
-
-    console.log('🔔 Subscribed to approval changes');
-    return this.approvalChannel;
+  subscribeToApprovals(callback: (payload: any) => void): RealtimeSubscription {
+    return realtimeService.subscribe<ApprovalCard>({
+      table: 'approval_cards',
+      onChange: callback,
+    });
   }
 
   /**
-   * Unsubscribe from all channels
+   * Unsubscribe from all
    */
   unsubscribeAll(): void {
-    if (this.documentChannel) {
-      supabase.removeChannel(this.documentChannel);
-      this.documentChannel = null;
-    }
-    if (this.approvalChannel) {
-      supabase.removeChannel(this.approvalChannel);
-      this.approvalChannel = null;
-    }
-    console.log('🔕 Unsubscribed from all channels');
-  }
-
-  // =====================================================
-  // BATCH OPERATIONS
-  // =====================================================
-
-  /**
-   * Get documents where user is a recipient
-   */
-  async getDocumentsForRecipient(recipientId: string): Promise<DocumentData[]> {
-    try {
-      const { data, error } = await supabase
-        .from('submitted_documents')
-        .select('*')
-        .contains('recipient_ids', [recipientId])
-        .order('submitted_date', { ascending: false });
-
-      if (error) throw error;
-      return data as DocumentData[];
-    } catch (error) {
-      console.error('❌ Error fetching documents for recipient:', error);
-      return [];
-    }
-  }
-
-  /**
-   * Get documents by status
-   */
-  async getDocumentsByStatus(status: string): Promise<DocumentData[]> {
-    try {
-      const { data, error } = await supabase
-        .from('submitted_documents')
-        .select('*')
-        .eq('status', status)
-        .order('submitted_date', { ascending: false });
-
-      if (error) throw error;
-      return data as DocumentData[];
-    } catch (error) {
-      console.error('❌ Error fetching documents by status:', error);
-      return [];
-    }
-  }
-
-  /**
-   * Get emergency documents
-   */
-  async getEmergencyDocuments(): Promise<DocumentData[]> {
-    try {
-      const { data, error } = await supabase
-        .from('submitted_documents')
-        .select('*')
-        .eq('is_emergency', true)
-        .order('submitted_date', { ascending: false });
-
-      if (error) throw error;
-      return data as DocumentData[];
-    } catch (error) {
-      console.error('❌ Error fetching emergency documents:', error);
-      return [];
-    }
+    realtimeService.unsubscribeAll();
   }
 }
 
-// Singleton instance
 export const supabaseDocumentService = new SupabaseDocumentService();
 export default supabaseDocumentService;
