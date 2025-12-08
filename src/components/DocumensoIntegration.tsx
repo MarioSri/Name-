@@ -14,7 +14,7 @@ import { aiSignaturePlacement, SignatureZone, DocumentAnalysis } from '@/service
 import { SignaturePlacementPreview } from '@/components/SignaturePlacementPreview';
 import { useDocumensoAPI } from '@/hooks/useDocumensoAPI';
 import { FileViewer } from '@/components/FileViewer';
-import { FaceAuthentication } from '@/components/FaceAuthentication';
+import { FaceAuthSimple } from '@/components/FaceAuthSimple';
 import * as pdfjsLib from 'pdfjs-dist';
 import mammoth from 'mammoth';
 import * as XLSX from 'xlsx';
@@ -2153,7 +2153,7 @@ export const DocumensoIntegration: React.FC<DocumensoIntegrationProps> = ({
               </TabsContent>
 
               <TabsContent value="face-auth" className="flex-1 overflow-y-auto">
-                <FaceAuthentication
+                <FaceAuthSimple
                   userId={user.email}
                   onVerified={(success) => {
                     setFaceVerified(success);

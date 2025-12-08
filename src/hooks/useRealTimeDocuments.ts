@@ -4,7 +4,7 @@
  * Integrates Track Documents, Approval Center, Document Management, Emergency Management, and Approval Chain
  */
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
 import { realTimeDocumentService, DocumentData } from '@/services/RealTimeDocumentService';
 import { supabaseDocumentService } from '@/services/SupabaseDocumentService';
@@ -38,8 +38,12 @@ export const useRealTimeDocuments = (): UseRealTimeDocumentsReturn => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isConnected, setIsConnected] = useState(false);
+  
+  // Refs for debouncing and preventing concurrent loads
+  const loadDataTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const isLoadingRef = useRef(false);
 
-  // Load data from Supabase
+  // Load data from Supabase ONLY - NO localStorage
   const loadData = useCallback(async () => {
     if (!user) {
       setTrackDocuments([]);
@@ -48,29 +52,55 @@ export const useRealTimeDocuments = (): UseRealTimeDocumentsReturn => {
       return;
     }
 
+    // Prevent concurrent loads
+    if (isLoadingRef.current) {
+      console.log('⏳ Load already in progress, skipping...');
+      return;
+    }
+
     try {
-      setLoading(true);
+      isLoadingRef.current = true;
       setError(null);
 
-      // Load track documents from Supabase (documents submitted by current user)
-      const docs = await realTimeDocumentService.getDocumentsBySubmitter(user.id);
-      setTrackDocuments(docs);
-      console.log(`✅ Loaded ${docs.length} tracking documents for:`, user.name);
+      // Get user's Supabase UUID for proper filtering
+      const supabaseUuid = (user as any).supabaseUuid || user.id;
 
+      // Load track documents from Supabase (documents submitted by current user)
+      const docs = await realTimeDocumentService.getDocumentsBySubmitter(supabaseUuid);
+      
       // Load approval cards from Supabase (approvals for current user)
-      const approvals = await realTimeDocumentService.getApprovalCardsForRecipient(user.id);
+      const approvals = await realTimeDocumentService.getApprovalCardsForRecipient(supabaseUuid);
+      
+      // Update state - SUPABASE DATA ONLY
+      setTrackDocuments(docs);
       setApprovalCards(approvals);
-      console.log(`✅ Loaded ${approvals.length} approval cards for:`, user.name);
+      
+      console.log(`✅ [RealTime] Loaded ${docs.length} documents, ${approvals.length} approval cards for:`, user.name);
 
       setIsConnected(true);
     } catch (err) {
       console.error('❌ Error loading documents from Supabase:', err);
       setError('Failed to load documents');
       setIsConnected(false);
+      
+      // On error, set empty arrays - NO localStorage fallback
+      setTrackDocuments([]);
+      setApprovalCards([]);
     } finally {
       setLoading(false);
+      isLoadingRef.current = false;
     }
   }, [user]);
+
+  // Debounced load function to prevent rapid re-fetches causing flickering
+  const debouncedLoadData = useCallback(() => {
+    if (loadDataTimeoutRef.current) {
+      clearTimeout(loadDataTimeoutRef.current);
+    }
+    loadDataTimeoutRef.current = setTimeout(() => {
+      loadData();
+    }, 300); // 300ms debounce
+  }, [loadData]);
 
   // Refetch data
   const refetch = useCallback(async () => {
@@ -81,37 +111,37 @@ export const useRealTimeDocuments = (): UseRealTimeDocumentsReturn => {
   useEffect(() => {
     const handleDocumentSubmitted = () => {
       console.log('📄 Document submitted - reloading');
-      loadData();
+      debouncedLoadData();
     };
 
     const handleDocumentApproved = () => {
       console.log('✅ Document approved - reloading');
-      loadData();
+      debouncedLoadData();
     };
 
     const handleDocumentRejected = () => {
       console.log('❌ Document rejected - reloading');
-      loadData();
+      debouncedLoadData();
     };
 
     const handleEmergencyDocument = () => {
       console.log('🚨 Emergency document - reloading');
-      loadData();
+      debouncedLoadData();
     };
 
     const handleApprovalChainCreated = () => {
       console.log('🔗 Approval chain created - reloading');
-      loadData();
+      debouncedLoadData();
     };
 
     const handleRecipientsUpdated = () => {
       console.log('👥 Recipients updated - reloading');
-      loadData();
+      debouncedLoadData();
     };
 
     const handleSupabaseChange = () => {
       console.log('📡 Supabase change detected - reloading');
-      loadData();
+      debouncedLoadData();
     };
 
     // Register event listeners for window events
@@ -125,17 +155,22 @@ export const useRealTimeDocuments = (): UseRealTimeDocumentsReturn => {
     window.addEventListener('approval-change', handleSupabaseChange);
 
     // Real-time service events
-    realTimeDocumentService.on('document-created', loadData);
-    realTimeDocumentService.on('document-updated', loadData);
-    realTimeDocumentService.on('approval-required', loadData);
-    realTimeDocumentService.on('supabase-change', loadData);
-    realTimeDocumentService.on('approval-change', loadData);
+    realTimeDocumentService.on('document-created', debouncedLoadData);
+    realTimeDocumentService.on('document-updated', debouncedLoadData);
+    realTimeDocumentService.on('approval-required', debouncedLoadData);
+    realTimeDocumentService.on('supabase-change', debouncedLoadData);
+    realTimeDocumentService.on('approval-change', debouncedLoadData);
 
     // Subscribe to Supabase realtime
-    const docSubscription = supabaseDocumentService.subscribeToDocuments(() => loadData());
-    const approvalSubscription = supabaseDocumentService.subscribeToApprovals(() => loadData());
+    const docSubscription = supabaseDocumentService.subscribeToDocuments(() => debouncedLoadData());
+    const approvalSubscription = supabaseDocumentService.subscribeToApprovals(() => debouncedLoadData());
 
     return () => {
+      // Clear debounce timeout
+      if (loadDataTimeoutRef.current) {
+        clearTimeout(loadDataTimeoutRef.current);
+      }
+      
       window.removeEventListener('document-submitted', handleDocumentSubmitted);
       window.removeEventListener('document-approved', handleDocumentApproved);
       window.removeEventListener('document-rejected', handleDocumentRejected);
@@ -149,7 +184,7 @@ export const useRealTimeDocuments = (): UseRealTimeDocumentsReturn => {
       docSubscription.unsubscribe();
       approvalSubscription.unsubscribe();
     };
-  }, [loadData, user]);
+  }, [debouncedLoadData, user]);
 
   // Load data on mount and user change
   useEffect(() => {

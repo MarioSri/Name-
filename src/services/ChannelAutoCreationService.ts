@@ -1,5 +1,11 @@
 import { ChatChannel } from '@/types/chat';
 
+/**
+ * ChannelAutoCreationService
+ * NOW USES IN-MEMORY STORAGE - NO localStorage
+ * TODO: Migrate to Supabase for persistent channel storage
+ */
+
 interface DocumentSubmission {
   documentId: string;
   documentTitle: string;
@@ -10,6 +16,9 @@ interface DocumentSubmission {
   source: 'Document Management' | 'Emergency Management' | 'Approval Chain with Bypass';
   submittedAt: Date;
 }
+
+// In-memory channel storage
+const channelStore: Map<string, ChatChannel> = new Map();
 
 export class ChannelAutoCreationService {
   private static readonly STORAGE_KEY = 'document-channels';
@@ -52,7 +61,7 @@ export class ChannelAutoCreationService {
       }
     };
 
-    // Save to localStorage
+    // Save to in-memory store (no localStorage)
     this.saveChannel(channel);
 
     // Broadcast event for real-time updates
@@ -69,38 +78,33 @@ export class ChannelAutoCreationService {
   }
 
   /**
-   * Save channel to localStorage
+   * Save channel to in-memory store
    */
   private static saveChannel(channel: ChatChannel): void {
     try {
-      const existingChannels = this.getChannels();
-      
       // Check if channel already exists for this document
-      const existingIndex = existingChannels.findIndex(
+      const existingChannel = Array.from(channelStore.values()).find(
         ch => ch.documentId === channel.documentId
       );
 
-      if (existingIndex >= 0) {
+      if (existingChannel) {
         // Update existing channel
-        existingChannels[existingIndex] = channel;
+        channelStore.set(existingChannel.id, channel);
       } else {
         // Add new channel
-        existingChannels.push(channel);
+        channelStore.set(channel.id, channel);
       }
-
-      localStorage.setItem(this.STORAGE_KEY, JSON.stringify(existingChannels));
     } catch (error) {
       console.error('Failed to save channel:', error);
     }
   }
 
   /**
-   * Get all channels from localStorage
+   * Get all channels from in-memory store
    */
   static getChannels(): ChatChannel[] {
     try {
-      const channelsJson = localStorage.getItem(this.STORAGE_KEY);
-      return channelsJson ? JSON.parse(channelsJson) : [];
+      return Array.from(channelStore.values());
     } catch (error) {
       console.error('Failed to load channels:', error);
       return [];
@@ -130,16 +134,14 @@ export class ChannelAutoCreationService {
    */
   static addMembersToChannel(channelId: string, newMembers: string[]): void {
     try {
-      const channels = this.getChannels();
-      const channelIndex = channels.findIndex(ch => ch.id === channelId);
+      const channel = channelStore.get(channelId);
 
-      if (channelIndex >= 0) {
-        const existingMembers = channels[channelIndex].members || [];
-        channels[channelIndex].members = Array.from(new Set([...existingMembers, ...newMembers]));
-        channels[channelIndex].updatedAt = new Date();
-
-        localStorage.setItem(this.STORAGE_KEY, JSON.stringify(channels));
-        this.broadcastChannelUpdated(channels[channelIndex]);
+      if (channel) {
+        const existingMembers = channel.members || [];
+        channel.members = Array.from(new Set([...existingMembers, ...newMembers]));
+        channel.updatedAt = new Date();
+        channelStore.set(channelId, channel);
+        this.broadcastChannelUpdated(channel);
       }
     } catch (error) {
       console.error('Failed to add members:', error);
@@ -151,9 +153,7 @@ export class ChannelAutoCreationService {
    */
   static deleteChannel(channelId: string): void {
     try {
-      const channels = this.getChannels();
-      const filteredChannels = channels.filter(ch => ch.id !== channelId);
-      localStorage.setItem(this.STORAGE_KEY, JSON.stringify(filteredChannels));
+      channelStore.delete(channelId);
       this.broadcastChannelDeleted(channelId);
     } catch (error) {
       console.error('Failed to delete channel:', error);
@@ -168,13 +168,6 @@ export class ChannelAutoCreationService {
       detail: { channel }
     });
     window.dispatchEvent(event);
-
-    // Also trigger storage event for cross-tab sync
-    window.dispatchEvent(new StorageEvent('storage', {
-      key: this.STORAGE_KEY,
-      newValue: JSON.stringify(this.getChannels()),
-      storageArea: localStorage
-    }));
   }
 
   /**
@@ -185,12 +178,6 @@ export class ChannelAutoCreationService {
       detail: { channel }
     });
     window.dispatchEvent(event);
-
-    window.dispatchEvent(new StorageEvent('storage', {
-      key: this.STORAGE_KEY,
-      newValue: JSON.stringify(this.getChannels()),
-      storageArea: localStorage
-    }));
   }
 
   /**
@@ -201,12 +188,6 @@ export class ChannelAutoCreationService {
       detail: { channelId }
     });
     window.dispatchEvent(event);
-
-    window.dispatchEvent(new StorageEvent('storage', {
-      key: this.STORAGE_KEY,
-      newValue: JSON.stringify(this.getChannels()),
-      storageArea: localStorage
-    }));
   }
 
   /**
@@ -214,14 +195,13 @@ export class ChannelAutoCreationService {
    */
   static updateChannelDescription(channelId: string, description: string): void {
     try {
-      const channels = this.getChannels();
-      const channelIndex = channels.findIndex(ch => ch.id === channelId);
+      const channel = channelStore.get(channelId);
 
-      if (channelIndex >= 0) {
-        channels[channelIndex].description = description;
-        channels[channelIndex].updatedAt = new Date();
-        localStorage.setItem(this.STORAGE_KEY, JSON.stringify(channels));
-        this.broadcastChannelUpdated(channels[channelIndex]);
+      if (channel) {
+        channel.description = description;
+        channel.updatedAt = new Date();
+        channelStore.set(channelId, channel);
+        this.broadcastChannelUpdated(channel);
       }
     } catch (error) {
       console.error('Failed to update channel description:', error);

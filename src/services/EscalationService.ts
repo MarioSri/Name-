@@ -5,7 +5,11 @@
  * Supports two modes:
  * 1. Sequential Cyclic Escalation: Forwards card to next recipient after timeout
  * 2. Parallel Notification Escalation: Notifies authorities without moving cards
+ * 
+ * NOW USES SUPABASE - NO localStorage
  */
+
+import { supabaseDocumentService } from './SupabaseDocumentService';
 
 interface EscalationTimer {
   documentId: string;
@@ -80,7 +84,7 @@ class EscalationService {
   /**
    * Handle sequential escalation trigger
    */
-  private handleSequentialEscalation(config: EscalationConfig): void {
+  private async handleSequentialEscalation(config: EscalationConfig): Promise<void> {
     console.log(`🔔 [Sequential Escalation] Timer triggered for: ${config.documentId}`);
 
     // Get current timer state
@@ -90,115 +94,109 @@ class EscalationService {
       return;
     }
 
-    // Check if document still exists and is pending
-    const trackingCards = JSON.parse(localStorage.getItem('submitted-documents') || '[]');
-    const document = trackingCards.find((doc: any) => doc.id === config.documentId);
+    // Check if document still exists and is pending - FROM SUPABASE
+    try {
+      const document = await supabaseDocumentService.getDocumentByTrackingId(config.documentId);
 
-    if (!document) {
-      console.log('❌ Document not found, stopping escalation');
-      this.stopEscalation(config.documentId);
-      return;
-    }
+      if (!document) {
+        console.log('❌ Document not found in Supabase, stopping escalation');
+        this.stopEscalation(config.documentId);
+        return;
+      }
 
-    if (document.status === 'approved' || document.status === 'rejected') {
-      console.log(`✅ Document already ${document.status}, stopping escalation`);
-      this.stopEscalation(config.documentId);
-      return;
-    }
+      if (document.status === 'approved' || document.status === 'rejected') {
+        console.log(`✅ Document already ${document.status}, stopping escalation`);
+        this.stopEscalation(config.documentId);
+        return;
+      }
 
-    // Check if current recipient has acted
-    const currentStep = document.workflow.steps.find((s: any) => s.status === 'current');
-    if (!currentStep) {
-      console.log('✅ No current step (workflow complete), stopping escalation');
-      this.stopEscalation(config.documentId);
-      return;
-    }
+      // Check if current recipient has acted
+      const workflow = document.workflow as any;
+      const currentStep = workflow?.steps?.find((s: any) => s.status === 'current');
+      if (!currentStep) {
+        console.log('✅ No current step (workflow complete), stopping escalation');
+        this.stopEscalation(config.documentId);
+        return;
+      }
 
-    // Current recipient hasn't acted - proceed with escalation
-    console.log(`⚡ No response from ${currentStep.assignee}, escalating...`);
+      // Current recipient hasn't acted - proceed with escalation
+      console.log(`⚡ No response from ${currentStep.assignee}, escalating...`);
 
-    const newEscalationLevel = timer.escalationLevel + 1;
-    const nextRecipientIndex = (timer.currentRecipientIndex + 1) % config.recipients.length;
+      const newEscalationLevel = timer.escalationLevel + 1;
+      const nextRecipientIndex = (timer.currentRecipientIndex + 1) % config.recipients.length;
 
-    // Update tracking card with escalation
-    const updatedCards = trackingCards.map((doc: any) => {
-      if (doc.id === config.documentId) {
-        // Mark current step as escalated but keep it current
-        const updatedSteps = doc.workflow.steps.map((step: any) => {
-          if (step.status === 'current' && step.assignee === currentStep.assignee) {
-            return {
-              ...step,
-              escalated: true,
-              escalationLevel: newEscalationLevel,
-              escalatedAt: new Date().toISOString()
-            };
-          }
-          return step;
-        });
-
-        // If cyclic, also mark next recipient's step as current
-        if (config.cyclicEscalation && nextRecipientIndex !== timer.currentRecipientIndex) {
-          const nextRecipientStep = updatedSteps.find((s: any, idx: number) => 
-            idx === nextRecipientIndex + 1 // +1 because first step is submission
-          );
-
-          if (nextRecipientStep && nextRecipientStep.status === 'pending') {
-            updatedSteps[nextRecipientIndex + 1] = {
-              ...nextRecipientStep,
-              status: 'current'
-            };
-          }
-        }
-
-        return {
-          ...doc,
-          workflow: {
-            ...doc.workflow,
+      // Build updated workflow
+      const updatedSteps = workflow.steps.map((step: any) => {
+        if (step.status === 'current' && step.assignee === currentStep.assignee) {
+          return {
+            ...step,
+            escalated: true,
             escalationLevel: newEscalationLevel,
-            lastEscalationTime: new Date().toISOString(),
-            steps: updatedSteps
-          }
-        };
-      }
-      return doc;
-    });
-
-    localStorage.setItem('submitted-documents', JSON.stringify(updatedCards));
-
-    // Trigger UI updates
-    window.dispatchEvent(new CustomEvent('workflow-updated'));
-    window.dispatchEvent(new CustomEvent('escalation-triggered', {
-      detail: {
-        documentId: config.documentId,
-        documentTitle: config.documentTitle,
-        escalationLevel: newEscalationLevel,
-        previousRecipient: currentStep.assignee
-      }
-    }));
-
-    console.log(`✅ Escalation complete:`, {
-      level: newEscalationLevel,
-      previousRecipient: currentStep.assignee,
-      cyclePosition: `${nextRecipientIndex + 1} of ${config.recipients.length}`
-    });
-
-    // Schedule next escalation if cyclic
-    if (config.cyclicEscalation) {
-      this.activeTimers.set(config.documentId, {
-        ...timer,
-        escalationLevel: newEscalationLevel,
-        currentRecipientIndex: nextRecipientIndex,
-        lastEscalationTime: new Date()
+            escalatedAt: new Date().toISOString()
+          };
+        }
+        return step;
       });
 
-      const nextTimerId = setTimeout(() => {
-        this.handleSequentialEscalation(config);
-      }, config.timeout);
+      // If cyclic, also mark next recipient's step as current
+      if (config.cyclicEscalation && nextRecipientIndex !== timer.currentRecipientIndex) {
+        const nextStepIdx = nextRecipientIndex + 1; // +1 because first step is submission
+        if (updatedSteps[nextStepIdx] && updatedSteps[nextStepIdx].status === 'pending') {
+          updatedSteps[nextStepIdx] = {
+            ...updatedSteps[nextStepIdx],
+            status: 'current'
+          };
+        }
+      }
 
-      this.activeTimers.get(config.documentId)!.timerId = nextTimerId;
+      // Update document in Supabase
+      await supabaseDocumentService.updateDocument(config.documentId, {
+        workflow: {
+          ...workflow,
+          escalationLevel: newEscalationLevel,
+          lastEscalationTime: new Date().toISOString(),
+          steps: updatedSteps
+        }
+      });
 
-      console.log(`⏰ Next escalation scheduled in ${this.formatTimeout(config.timeout)}`);
-    } else {
+      // Trigger UI updates
+      window.dispatchEvent(new CustomEvent('workflow-updated'));
+      window.dispatchEvent(new CustomEvent('escalation-triggered', {
+        detail: {
+          documentId: config.documentId,
+          documentTitle: config.documentTitle,
+          escalationLevel: newEscalationLevel,
+          previousRecipient: currentStep.assignee
+        }
+      }));
+
+      console.log(`✅ Escalation complete:`, {
+        level: newEscalationLevel,
+        previousRecipient: currentStep.assignee,
+        cyclePosition: `${nextRecipientIndex + 1} of ${config.recipients.length}`
+      });
+
+      // Schedule next escalation if cyclic
+      if (config.cyclicEscalation) {
+        this.activeTimers.set(config.documentId, {
+          ...timer,
+          escalationLevel: newEscalationLevel,
+          currentRecipientIndex: nextRecipientIndex,
+          lastEscalationTime: new Date()
+        });
+
+        const nextTimerId = setTimeout(() => {
+          this.handleSequentialEscalation(config);
+        }, config.timeout);
+
+        this.activeTimers.get(config.documentId)!.timerId = nextTimerId;
+
+        console.log(`⏰ Next escalation scheduled in ${this.formatTimeout(config.timeout)}`);
+      } else {
+        this.stopEscalation(config.documentId);
+      }
+    } catch (error) {
+      console.error('❌ Error in sequential escalation:', error);
       this.stopEscalation(config.documentId);
     }
   }
@@ -228,7 +226,7 @@ class EscalationService {
   /**
    * Handle parallel escalation trigger
    */
-  private handleParallelEscalation(config: EscalationConfig): void {
+  private async handleParallelEscalation(config: EscalationConfig): Promise<void> {
     console.log(`🔔 [Parallel Escalation] Timer triggered for: ${config.documentId}`);
 
     const timer = this.activeTimers.get(config.documentId);
@@ -237,90 +235,87 @@ class EscalationService {
       return;
     }
 
-    // Check document status
-    const trackingCards = JSON.parse(localStorage.getItem('submitted-documents') || '[]');
-    const document = trackingCards.find((doc: any) => doc.id === config.documentId);
+    try {
+      // Check document status - FROM SUPABASE
+      const document = await supabaseDocumentService.getDocumentByTrackingId(config.documentId);
 
-    if (!document) {
-      console.log('❌ Document not found, stopping escalation');
-      this.stopEscalation(config.documentId);
-      return;
-    }
-
-    if (document.status === 'approved' || document.status === 'rejected') {
-      console.log(`✅ Document already ${document.status}, stopping escalation`);
-      this.stopEscalation(config.documentId);
-      return;
-    }
-
-    // Check if any recipients have acted
-    const recipientSteps = document.workflow.steps.filter((s: any) => s.name !== 'Submission');
-    const respondedCount = recipientSteps.filter((s: any) => 
-      s.status === 'completed' || s.status === 'rejected'
-    ).length;
-
-    if (respondedCount === recipientSteps.length) {
-      console.log('✅ All recipients have responded, stopping escalation');
-      this.stopEscalation(config.documentId);
-      return;
-    }
-
-    // Some recipients haven't responded - notify authority
-    const newEscalationLevel = timer.escalationLevel + 1;
-    const authorityIndex = Math.min(newEscalationLevel - 1, this.AUTHORITY_CHAIN.length - 1);
-    const authorityId = this.AUTHORITY_CHAIN[authorityIndex];
-
-    console.log(`📬 Notifying authority level ${newEscalationLevel}: ${authorityId}`);
-
-    // Update tracking card
-    const updatedCards = trackingCards.map((doc: any) => {
-      if (doc.id === config.documentId) {
-        return {
-          ...doc,
-          workflow: {
-            ...doc.workflow,
-            escalationLevel: newEscalationLevel,
-            lastEscalationTime: new Date().toISOString(),
-            escalatedToAuthority: authorityId
-          }
-        };
+      if (!document) {
+        console.log('❌ Document not found in Supabase, stopping escalation');
+        this.stopEscalation(config.documentId);
+        return;
       }
-      return doc;
-    });
 
-    localStorage.setItem('submitted-documents', JSON.stringify(updatedCards));
+      if (document.status === 'approved' || document.status === 'rejected') {
+        console.log(`✅ Document already ${document.status}, stopping escalation`);
+        this.stopEscalation(config.documentId);
+        return;
+      }
 
-    // Notify authority (this would integrate with ExternalNotificationDispatcher)
-    window.dispatchEvent(new CustomEvent('authority-escalation', {
-      detail: {
-        documentId: config.documentId,
-        documentTitle: config.documentTitle,
+      // Check if any recipients have acted
+      const workflow = document.workflow as any;
+      const recipientSteps = workflow?.steps?.filter((s: any) => s.name !== 'Submission') || [];
+      const respondedCount = recipientSteps.filter((s: any) => 
+        s.status === 'completed' || s.status === 'rejected'
+      ).length;
+
+      if (respondedCount === recipientSteps.length) {
+        console.log('✅ All recipients have responded, stopping escalation');
+        this.stopEscalation(config.documentId);
+        return;
+      }
+
+      // Some recipients haven't responded - notify authority
+      const newEscalationLevel = timer.escalationLevel + 1;
+      const authorityIndex = Math.min(newEscalationLevel - 1, this.AUTHORITY_CHAIN.length - 1);
+      const authorityId = this.AUTHORITY_CHAIN[authorityIndex];
+
+      console.log(`📬 Notifying authority level ${newEscalationLevel}: ${authorityId}`);
+
+      // Update document in Supabase
+      await supabaseDocumentService.updateDocument(config.documentId, {
+        workflow: {
+          ...workflow,
+          escalationLevel: newEscalationLevel,
+          lastEscalationTime: new Date().toISOString(),
+          escalatedToAuthority: authorityId
+        }
+      });
+
+      // Notify authority (this would integrate with ExternalNotificationDispatcher)
+      window.dispatchEvent(new CustomEvent('authority-escalation', {
+        detail: {
+          documentId: config.documentId,
+          documentTitle: config.documentTitle,
+          escalationLevel: newEscalationLevel,
+          authorityId: authorityId,
+          respondedCount,
+          totalRecipients: recipientSteps.length
+        }
+      }));
+
+      // Trigger UI updates
+      window.dispatchEvent(new CustomEvent('workflow-updated'));
+
+      console.log(`✅ Authority notified: ${authorityId}`);
+
+      // Schedule next escalation
+      this.activeTimers.set(config.documentId, {
+        ...timer,
         escalationLevel: newEscalationLevel,
-        authorityId: authorityId,
-        respondedCount,
-        totalRecipients: recipientSteps.length
-      }
-    }));
+        lastEscalationTime: new Date()
+      });
 
-    // Trigger UI updates
-    window.dispatchEvent(new CustomEvent('workflow-updated'));
+      const nextTimerId = setTimeout(() => {
+        this.handleParallelEscalation(config);
+      }, config.timeout);
 
-    console.log(`✅ Authority notified: ${authorityId}`);
+      this.activeTimers.get(config.documentId)!.timerId = nextTimerId;
 
-    // Schedule next escalation
-    this.activeTimers.set(config.documentId, {
-      ...timer,
-      escalationLevel: newEscalationLevel,
-      lastEscalationTime: new Date()
-    });
-
-    const nextTimerId = setTimeout(() => {
-      this.handleParallelEscalation(config);
-    }, config.timeout);
-
-    this.activeTimers.get(config.documentId)!.timerId = nextTimerId;
-
-    console.log(`⏰ Next authority notification scheduled in ${this.formatTimeout(config.timeout)}`);
+      console.log(`⏰ Next authority notification scheduled in ${this.formatTimeout(config.timeout)}`);
+    } catch (error) {
+      console.error('❌ Error in parallel escalation:', error);
+      this.stopEscalation(config.documentId);
+    }
   }
 
   /**

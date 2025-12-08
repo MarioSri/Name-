@@ -176,36 +176,68 @@ export function useSupabaseRealTimeDocuments(): UseSupabaseRealTimeDocumentsResu
   const [isConnected, setIsConnected] = useState(false);
   
   const subscriptionsRef = useRef<any[]>([]);
+  const loadDataTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const isLoadingRef = useRef(false);
 
-  // Load initial data
+  // Load initial data - SUPABASE ONLY, NO localStorage
   const loadData = useCallback(async () => {
     if (!user?.id) {
       setLoading(false);
       return;
     }
 
-    setLoading(true);
+    // Prevent concurrent loads - debounce rapid calls
+    if (isLoadingRef.current) {
+      console.log('⏳ [Supabase] Load already in progress, skipping...');
+      return;
+    }
+
+    isLoadingRef.current = true;
     setError(null);
 
     try {
+      // Get user's Supabase UUID for proper filtering
+      const supabaseUuid = (user as any).supabaseUuid || user.id;
+      
       // Get user's submitted documents (tracking cards)
-      const docs = await supabaseStorage.getDocumentsBySubmitter(user.id);
-      setTrackDocuments(docs.map(toDocumentData));
-
+      const docs = await supabaseStorage.getDocumentsBySubmitter(supabaseUuid);
+      
       // Get approval cards for this user
-      const cards = await supabaseStorage.getApprovalCardsByRecipient(user.id);
-      setApprovalCards(cards.map(toApprovalCardData));
+      const cards = await supabaseStorage.getApprovalCardsByRecipient(supabaseUuid);
+
+      // Convert to frontend format - SUPABASE DATA ONLY
+      const supabaseDocs = docs.map(toDocumentData);
+      const supabaseCards = cards.map(toApprovalCardData);
+
+      // Update state atomically
+      setTrackDocuments(supabaseDocs);
+      setApprovalCards(supabaseCards);
 
       setIsConnected(true);
-      console.log('✅ [Supabase] Loaded', docs.length, 'documents and', cards.length, 'approval cards');
+      console.log('✅ [Supabase] Loaded', supabaseDocs.length, 'documents,', supabaseCards.length, 'approval cards');
     } catch (err) {
       console.error('❌ [Supabase] Error loading data:', err);
       setError(err instanceof Error ? err.message : 'Failed to load data');
       setIsConnected(false);
+      
+      // On error, set empty arrays - NO localStorage fallback
+      setTrackDocuments([]);
+      setApprovalCards([]);
     } finally {
       setLoading(false);
+      isLoadingRef.current = false;
     }
   }, [user?.id]);
+
+  // Debounced load function to prevent rapid re-fetches causing flickering
+  const debouncedLoadData = useCallback(() => {
+    if (loadDataTimeoutRef.current) {
+      clearTimeout(loadDataTimeoutRef.current);
+    }
+    loadDataTimeoutRef.current = setTimeout(() => {
+      loadData();
+    }, 300); // 300ms debounce
+  }, [loadData]);
 
   // Set up real-time subscriptions
   useEffect(() => {
@@ -216,8 +248,8 @@ export function useSupabaseRealTimeDocuments(): UseSupabaseRealTimeDocumentsResu
     const docChannel = supabaseStorage.subscribeToDocuments(user.id, (payload) => {
       console.log('📡 [Supabase] Document change:', payload.eventType);
       
-      // Refetch to get complete data with joined recipients
-      loadData();
+      // Use debounced load to prevent flickering
+      debouncedLoadData();
     });
 
     // Subscribe to approval cards for this user
@@ -235,8 +267,8 @@ export function useSupabaseRealTimeDocuments(): UseSupabaseRealTimeDocumentsResu
         });
       }
       
-      // Refetch to get complete data with joined recipients
-      loadData();
+      // Use debounced load to prevent flickering
+      debouncedLoadData();
     });
 
     subscriptionsRef.current = [docChannel, approvalChannel];
@@ -246,10 +278,13 @@ export function useSupabaseRealTimeDocuments(): UseSupabaseRealTimeDocumentsResu
 
     // Cleanup
     return () => {
+      if (loadDataTimeoutRef.current) {
+        clearTimeout(loadDataTimeoutRef.current);
+      }
       subscriptionsRef.current.forEach(channel => channel?.unsubscribe?.());
       subscriptionsRef.current = [];
     };
-  }, [user?.id, loadData, toast]);
+  }, [user?.id, loadData, debouncedLoadData, toast]);
 
   // Submit a new document
   const submitDocument = useCallback(async (data: Partial<DocumentData>): Promise<DocumentData> => {
@@ -296,6 +331,11 @@ export function useSupabaseRealTimeDocuments(): UseSupabaseRealTimeDocumentsResu
       // Use provided tracking ID or generate new one
       const trackingId = data.trackingId || `DOC-${Date.now()}`;
 
+      // Get submitter ID - prefer supabaseUuid if available, otherwise fall back to user.id
+      // The SupabaseStorageService will look up the UUID if needed
+      const submitterId = (user as any).supabaseUuid || user.id;
+      console.log('📤 Submitting document with submitter_id:', submitterId, '(user.id:', user.id, ')');
+
       // Create document in Supabase
       const doc = await supabaseStorage.createDocument({
         tracking_id: trackingId,
@@ -303,7 +343,7 @@ export function useSupabaseRealTimeDocuments(): UseSupabaseRealTimeDocumentsResu
         description: data.description,
         type: data.type || 'Document',
         priority: data.priority || 'normal',
-        submitter_id: user.id,
+        submitter_id: submitterId,
         submitter_name: user.name || user.email?.split('@')[0] || 'User',
         submitter_role: user.role,
         routing_type: data.routingType || 'sequential',
@@ -336,7 +376,7 @@ export function useSupabaseRealTimeDocuments(): UseSupabaseRealTimeDocumentsResu
           type: data.type || 'Document',
           priority: data.priority || 'normal',
           submitter: user.name || user.email?.split('@')[0] || 'User',
-          submitter_id: user.id,
+          submitter_id: submitterId, // Use the resolved submitter ID
           current_recipient_id: firstRecipient.userId, // Start with first recipient
           routing_type: 'sequential',
           is_emergency: data.isEmergency || false,
@@ -358,7 +398,7 @@ export function useSupabaseRealTimeDocuments(): UseSupabaseRealTimeDocumentsResu
             type: data.type || 'Document',
             priority: data.priority || 'normal',
             submitter: user.name || user.email?.split('@')[0] || 'User',
-            submitter_id: user.id,
+            submitter_id: submitterId, // Use the resolved submitter ID
             current_recipient_id: recipient.userId, // Each recipient gets the card
             routing_type: 'parallel',
             is_emergency: data.isEmergency || false,

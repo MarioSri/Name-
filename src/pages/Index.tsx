@@ -43,16 +43,11 @@ const Index = () => {
     }
   };
 
-  // Redirect authenticated users to intended page or dashboard
+  // Redirect authenticated users to dashboard
   useEffect(() => {
     if (isAuthenticated && user) {
-      const redirectPath = localStorage.getItem('iaoms-redirect-path');
-      if (redirectPath) {
-        localStorage.removeItem('iaoms-redirect-path');
-        navigate(redirectPath, { replace: true });
-      } else {
-        navigate('/dashboard', { replace: true });
-      }
+      // Always redirect to dashboard after login (no localStorage redirect path)
+      navigate('/dashboard', { replace: true });
     }
   }, [isAuthenticated, user, navigate]);
 

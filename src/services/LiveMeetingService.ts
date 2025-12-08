@@ -6,10 +6,41 @@ import {
   URGENCY_CONFIGS,
   LIVE_MEETING_PERMISSIONS
 } from '../types/liveMeeting';
+import { supabase } from '@/lib/supabase';
+
+// In-memory current user cache (populated from Supabase auth)
+let cachedCurrentUser: { id: string; name: string; role: string } | null = null;
 
 class LiveMeetingService {
   private baseUrl = import.meta.env.VITE_API_URL || 'http://localhost:3000/api';
   private isDevelopment = import.meta.env.DEV;
+
+  // Get current user from Supabase auth session
+  private async getCurrentUser(): Promise<{ id: string; name: string; role: string } | null> {
+    if (cachedCurrentUser) {
+      return cachedCurrentUser;
+    }
+    
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user) {
+        cachedCurrentUser = {
+          id: user.id,
+          name: user.email?.split('@')[0] || 'User',
+          role: 'employee'
+        };
+        return cachedCurrentUser;
+      }
+    } catch (error) {
+      console.error('Error getting current user:', error);
+    }
+    return null;
+  }
+  
+  // Set current user (for external auth context updates)
+  public setCurrentUser(user: { id: string; name: string; role: string } | null): void {
+    cachedCurrentUser = user;
+  }
 
   // Create a new live meeting request
   async createRequest(requestData: CreateLiveMeetingRequestDto): Promise<LiveMeetingRequest> {
@@ -22,7 +53,7 @@ class LiveMeetingService {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${this.getAuthToken()}`
+          'Authorization': `Bearer ${await this.getAuthToken()}`
         },
         body: JSON.stringify(requestData)
       });
@@ -214,27 +245,59 @@ class LiveMeetingService {
     console.log('Handling accepted live meeting request:', requestId);
   }
 
-  private getAuthToken(): string {
-    // Get authentication token from storage
-    return localStorage.getItem('authToken') || '';
+  private async getAuthToken(): Promise<string> {
+    // Get authentication token from Supabase session
+    const { data: { session } } = await supabase.auth.getSession();
+    return session?.access_token || '';
   }
 
-  // Mock implementations for development
+  // Supabase-backed implementation for development
   private async mockCreateRequest(requestData: CreateLiveMeetingRequestDto): Promise<LiveMeetingRequest> {
+    const { supabaseRealTimeFeatures } = await import('@/services/SupabaseRealTimeFeatures');
+    
     const urgencyConfig = URGENCY_CONFIGS[requestData.urgency];
     const expiresAt = new Date();
     expiresAt.setMinutes(expiresAt.getMinutes() + urgencyConfig.expiresInMinutes);
-
+    
+    // Get current user from Supabase auth
+    const currentUser = await this.getCurrentUser() || { 
+      id: 'current_user_id', 
+      name: 'Current User',
+      role: 'employee'
+    };
+    
+    // Create in Supabase
+    const supabaseRequest = await supabaseRealTimeFeatures.liveMeet.create({
+      document_id: requestData.documentId,
+      document_type: requestData.documentType,
+      document_title: requestData.documentTitle,
+      requester_id: currentUser.id,
+      requester_name: currentUser.name,
+      requester_role: currentUser.role,
+      target_user_id: requestData.targetUserIds[0],
+      target_user_name: 'Target User', // Will be resolved from recipients
+      target_user_role: 'principal',
+      urgency: requestData.urgency,
+      meeting_format: requestData.meetingFormat,
+      purpose: requestData.purpose,
+      agenda: requestData.agenda,
+      requested_time: requestData.requestedTime?.toISOString(),
+      location: requestData.location,
+      status: 'pending',
+      expires_at: expiresAt.toISOString()
+    });
+    
+    // Convert Supabase response to LiveMeetingRequest format
     const request: LiveMeetingRequest = {
-      id: `live_req_${Date.now()}`,
+      id: supabaseRequest?.id || `live_req_${Date.now()}`,
       type: 'live_communication_request',
       documentId: requestData.documentId,
       documentType: requestData.documentType,
       documentTitle: requestData.documentTitle,
-      requesterId: 'current_user_id', // Mock current user
-      requesterName: 'Current User',
-      requesterRole: 'employee',
-      targetUserId: requestData.targetUserIds[0], // For simplicity, use first target
+      requesterId: currentUser.id,
+      requesterName: currentUser.name,
+      requesterRole: currentUser.role,
+      targetUserId: requestData.targetUserIds[0],
       targetUserName: 'Target User',
       targetUserRole: 'principal',
       urgency: requestData.urgency,
@@ -257,33 +320,77 @@ class LiveMeetingService {
       expiresAt
     };
 
-    // Simulate API delay
-    await new Promise(resolve => setTimeout(resolve, 500));
-    
-    console.log('Mock: Created live meeting request:', request);
+    console.log('Supabase: Created live meeting request:', request);
     return request;
   }
 
   private async mockRespondToRequest(response: LiveMeetingResponse): Promise<void> {
-    console.log('Mock: Responding to live meeting request:', response);
+    const { supabaseRealTimeFeatures } = await import('@/services/SupabaseRealTimeFeatures');
+    
+    console.log('Supabase: Responding to live meeting request:', response);
+    
+    // Update status in Supabase
+    await supabaseRealTimeFeatures.liveMeet.update(response.requestId, {
+      status: response.response === 'accept' ? 'accepted' : 
+              response.response === 'decline' ? 'declined' : 
+              response.response === 'propose_alternative' ? 'pending' : 'cancelled'
+    });
     
     if (response.response === 'accept') {
-      // Generate mock meeting link
-      const meetingLink = `https://meet.google.com/mock-${Date.now()}`;
-      console.log('Mock: Generated meeting link:', meetingLink);
+      // Generate meeting link
+      const meetingLink = await this.generateMeetingLink('online');
+      console.log('Supabase: Generated meeting link:', meetingLink);
+      
+      // Update with meeting link
+      await supabaseRealTimeFeatures.liveMeet.update(response.requestId, {
+        meeting_link: meetingLink
+      });
     }
-    
-    // Simulate API delay
-    await new Promise(resolve => setTimeout(resolve, 300));
   }
 
   private async mockGetMyRequests(filter?: string): Promise<LiveMeetingRequest[]> {
-    // Return mock data for development
-    const mockRequests: LiveMeetingRequest[] = [];
+    const { supabaseRealTimeFeatures } = await import('@/services/SupabaseRealTimeFeatures');
+    
+    // Get current user from Supabase auth
+    const currentUser = await this.getCurrentUser();
+    
+    if (!currentUser?.id) {
+      return [];
+    }
+    
+    // Fetch from Supabase
+    const supabaseRequests = await supabaseRealTimeFeatures.liveMeet.getForUser(currentUser.id);
+    
+    // Convert to LiveMeetingRequest format
+    const requests: LiveMeetingRequest[] = supabaseRequests.map((req: any) => ({
+      id: req.id,
+      type: 'live_communication_request',
+      documentId: req.document_id,
+      documentType: req.document_type,
+      documentTitle: req.document_title,
+      requesterId: req.requester_id,
+      requesterName: req.requester_name,
+      requesterRole: req.requester_role,
+      targetUserId: req.target_user_id,
+      targetUserName: req.target_user_name,
+      targetUserRole: req.target_user_role,
+      urgency: req.urgency,
+      meetingFormat: req.meeting_format,
+      purpose: req.purpose,
+      agenda: req.agenda,
+      requestedTime: req.requested_time ? new Date(req.requested_time) : undefined,
+      location: req.location,
+      status: req.status,
+      meetingLink: req.meeting_link,
+      participants: [],
+      createdAt: new Date(req.created_at),
+      updatedAt: new Date(req.updated_at),
+      expiresAt: req.expires_at ? new Date(req.expires_at) : undefined
+    }));
 
     // Apply filter
     if (filter && filter !== 'all') {
-      return mockRequests.filter(req => {
+      return requests.filter(req => {
         switch (filter) {
           case 'pending':
             return req.status === 'pending';
@@ -297,18 +404,50 @@ class LiveMeetingService {
       });
     }
 
-    return mockRequests;
+    return requests;
   }
 
   private async mockGetStats(): Promise<LiveMeetingStats> {
+    const { supabaseRealTimeFeatures } = await import('@/services/SupabaseRealTimeFeatures');
+    
+    // Get current user from Supabase auth
+    const currentUser = await this.getCurrentUser();
+    
+    if (!currentUser?.id) {
+      return {
+        totalRequests: 0,
+        pendingRequests: 0,
+        immediateRequests: 0,
+        urgentRequests: 0,
+        todaysMeetings: 0,
+        successRate: 0,
+        averageResponseTime: 0
+      };
+    }
+    
+    // Fetch all requests from Supabase
+    const requests = await supabaseRealTimeFeatures.liveMeet.getForUser(currentUser.id);
+    
+    const today = new Date().toDateString();
+    const totalRequests = requests.length;
+    const pendingRequests = requests.filter((r: any) => r.status === 'pending').length;
+    const immediateRequests = requests.filter((r: any) => r.urgency === 'immediate').length;
+    const urgentRequests = requests.filter((r: any) => r.urgency === 'urgent').length;
+    const todaysMeetings = requests.filter((r: any) => 
+      r.status === 'accepted' && new Date(r.requested_time).toDateString() === today
+    ).length;
+    
+    const acceptedRequests = requests.filter((r: any) => r.status === 'accepted').length;
+    const successRate = totalRequests > 0 ? Math.round((acceptedRequests / totalRequests) * 100) : 0;
+    
     return {
-      totalRequests: 24,
-      pendingRequests: 3,
-      immediateRequests: 1,
-      urgentRequests: 2,
-      todaysMeetings: 8,
-      successRate: 94,
-      averageResponseTime: 12 // minutes
+      totalRequests,
+      pendingRequests,
+      immediateRequests,
+      urgentRequests,
+      todaysMeetings,
+      successRate,
+      averageResponseTime: 12 // Would need response timestamps to calculate
     };
   }
 

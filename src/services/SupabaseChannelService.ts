@@ -50,8 +50,7 @@ class SupabaseChannelService {
     const { data, error } = await supabase
       .from('channels')
       .select('*')
-      .eq('is_active', true)
-      .or(`member_ids.cs.{${userId}},type.eq.announcement`)
+      .eq('is_archived', false)
       .order('updated_at', { ascending: false });
 
     if (error) {
@@ -70,7 +69,7 @@ class SupabaseChannelService {
       .from('channels')
       .select('*')
       .eq('department', department)
-      .eq('is_active', true)
+      .eq('is_archived', false)
       .order('name');
 
     if (error) {
@@ -105,12 +104,11 @@ class SupabaseChannelService {
         channel_id: channelId,
         name: `${department} Department`,
         description: `Official channel for ${department} department`,
-        type: 'department',
+        channel_type: 'department',
         department,
-        members: [creatorName],
-        member_ids: [creatorId],
         created_by: creatorId,
-        is_active: true,
+        is_archived: false,
+        is_private: false,
       })
       .select()
       .single();
@@ -154,11 +152,10 @@ class SupabaseChannelService {
       .insert({
         channel_id: channelId,
         name: `${user1Name} & ${user2Name}`,
-        type: 'private',
-        members: [user1Name, user2Name],
-        member_ids: [user1Id, user2Id],
+        channel_type: 'private',
         created_by: user1Id,
-        is_active: true,
+        is_archived: false,
+        is_private: true,
       })
       .select()
       .single();
@@ -190,11 +187,10 @@ class SupabaseChannelService {
         channel_id: channelId,
         name,
         description,
-        type: 'group',
-        members: memberNames,
-        member_ids: memberIds,
+        channel_type: 'group',
         created_by: creatorId,
-        is_active: true,
+        is_archived: false,
+        is_private: false,
       })
       .select()
       .single();

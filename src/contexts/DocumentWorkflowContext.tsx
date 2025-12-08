@@ -41,33 +41,30 @@ export const DocumentWorkflowProvider: React.FC<{ children: React.ReactNode }> =
   const [workflows, setWorkflows] = useState<DocumentWorkflow[]>([]);
 
   useEffect(() => {
-    // Load workflows from localStorage
-    const loadWorkflows = () => {
-      const submittedDocs = JSON.parse(localStorage.getItem('submitted-documents') || '[]');
-      const workflowData = submittedDocs.map((doc: any) => ({
-        id: doc.id,
-        title: doc.title,
-        currentStep: doc.workflow?.currentStep || 'Submission',
-        progress: doc.workflow?.progress || 0,
-        steps: doc.workflow?.steps || [],
-        recipients: doc.workflow?.recipients || [],
-        signedBy: doc.signedBy || [],
-        status: doc.status || 'pending'
-      }));
-      setWorkflows(workflowData);
-    };
-
-    loadWorkflows();
-
-    // Listen for storage changes
-    const handleStorageChange = (e: StorageEvent) => {
-      if (e.key === 'submitted-documents') {
-        loadWorkflows();
+    // Listen for workflow updates via custom events (data comes from Supabase via hooks)
+    const handleWorkflowUpdated = (e: CustomEvent) => {
+      if (e.detail?.documents) {
+        const workflowData = e.detail.documents.map((doc: any) => ({
+          id: doc.id,
+          title: doc.title,
+          currentStep: doc.workflow?.currentStep || 'Submission',
+          progress: doc.workflow?.progress || 0,
+          steps: doc.workflow?.steps || [],
+          recipients: doc.workflow?.recipients || [],
+          signedBy: doc.signedBy || [],
+          status: doc.status || 'pending'
+        }));
+        setWorkflows(workflowData);
       }
     };
 
-    window.addEventListener('storage', handleStorageChange);
-    return () => window.removeEventListener('storage', handleStorageChange);
+    window.addEventListener('submitted-documents-updated', handleWorkflowUpdated as EventListener);
+    window.addEventListener('workflow-updated', handleWorkflowUpdated as EventListener);
+    
+    return () => {
+      window.removeEventListener('submitted-documents-updated', handleWorkflowUpdated as EventListener);
+      window.removeEventListener('workflow-updated', handleWorkflowUpdated as EventListener);
+    };
   }, []);
 
   const updateWorkflow = (docId: string, updates: Partial<DocumentWorkflow>) => {
@@ -75,22 +72,10 @@ export const DocumentWorkflowProvider: React.FC<{ children: React.ReactNode }> =
       workflow.id === docId ? { ...workflow, ...updates } : workflow
     ));
 
-    // Update localStorage
-    const submittedDocs = JSON.parse(localStorage.getItem('submitted-documents') || '[]');
-    const updatedDocs = submittedDocs.map((doc: any) => {
-      if (doc.id === docId) {
-        return {
-          ...doc,
-          ...updates,
-          workflow: {
-            ...doc.workflow,
-            ...updates
-          }
-        };
-      }
-      return doc;
-    });
-    localStorage.setItem('submitted-documents', JSON.stringify(updatedDocs));
+    // Broadcast update via events (Supabase handles persistence)
+    window.dispatchEvent(new CustomEvent('workflow-update-requested', {
+      detail: { docId, updates }
+    }));
   };
 
   const signDocument = (docId: string, signerName: string) => {

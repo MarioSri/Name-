@@ -25,10 +25,8 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({
   const location = useLocation();
 
   if (!isAuthenticated || !user) {
-    // Store current location for redirect after login
-    if (location.pathname !== '/') {
-      localStorage.setItem('iaoms-redirect-path', location.pathname);
-    }
+    // User not authenticated - redirect to login
+    // Note: redirect path handling removed (always go to dashboard after login)
     return <Navigate to="/" replace />;
   }
 

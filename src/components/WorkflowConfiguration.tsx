@@ -231,11 +231,10 @@ export const WorkflowConfiguration: React.FC<WorkflowConfigurationProps> = ({ cl
 
     // If this is a document submission (has document title and files), create tracking card
     if (documentTitle && (uploadedFiles.length > 0 || selectedRecipients.length > 0)) {
-      // Load user profile from Personal Information
-      const userProfile = JSON.parse(localStorage.getItem('user-profile') || '{}');
-      const currentUserName = userProfile.name || user?.fullName || user?.name || 'User';
-      const currentUserDept = userProfile.department || user?.department || 'Department';
-      const currentUserDesignation = userProfile.designation || user?.role || 'Employee';
+      // Use user info from auth context directly (no localStorage)
+      const currentUserName = user?.fullName || user?.name || 'User';
+      const currentUserDept = user?.department || 'Department';
+      const currentUserDesignation = user?.role || 'Employee';
       const currentUserRole = user?.role || 'employee';
       
       // Convert files to base64 for localStorage storage
@@ -458,14 +457,13 @@ export const WorkflowConfiguration: React.FC<WorkflowConfigurationProps> = ({ cl
 
           console.log('✅ [Supabase] Approval chain document created:', supabaseDoc.id);
 
-          // Also save to localStorage for backward compatibility
+          // Broadcast tracking card creation via event (no localStorage)
           const trackingCardWithSupabaseId = { ...trackingCard, supabaseId: supabaseDoc.id };
-          const existingCards = JSON.parse(localStorage.getItem('submitted-documents') || '[]');
-          existingCards.unshift(trackingCardWithSupabaseId);
-          const limitedCards = existingCards.slice(0, 50);
-          localStorage.setItem('submitted-documents', JSON.stringify(limitedCards));
+          window.dispatchEvent(new CustomEvent('tracking-card-created', { 
+            detail: { card: trackingCardWithSupabaseId } 
+          }));
 
-          // Create approval card for localStorage
+          // Create approval card
           const approvalCard = {
             id: trackingCard.id,
             title: documentTitle,
@@ -485,11 +483,7 @@ export const WorkflowConfiguration: React.FC<WorkflowConfigurationProps> = ({ cl
             supabaseId: supabaseDoc.id
           };
 
-          const existingApprovals = JSON.parse(localStorage.getItem('pending-approvals') || '[]');
-          existingApprovals.unshift(approvalCard);
-          localStorage.setItem('pending-approvals', JSON.stringify(existingApprovals.slice(0, 50)));
-
-          // Dispatch events
+          // Dispatch events (Supabase handles persistence)
           window.dispatchEvent(new CustomEvent('workflow-updated', { detail: { trackingCard: trackingCardWithSupabaseId } }));
           window.dispatchEvent(new CustomEvent('approval-card-created', { detail: { approval: approvalCard } }));
 
@@ -504,10 +498,10 @@ export const WorkflowConfiguration: React.FC<WorkflowConfigurationProps> = ({ cl
           resetForms();
           return;
         } catch (error) {
-          console.error('❌ Supabase submission failed, falling back to localStorage:', error);
+          console.error('❌ Supabase submission failed:', error);
           toast({
-            title: "Supabase Error",
-            description: "Falling back to local storage. Your document will still be tracked.",
+            title: "Submission Error",
+            description: "Failed to submit document. Please try again.",
             variant: "destructive"
           });
           // Fall through to localStorage path
@@ -519,48 +513,14 @@ export const WorkflowConfiguration: React.FC<WorkflowConfigurationProps> = ({ cl
       // ========================================
       console.log('📦 Using localStorage for approval chain submission');
       
-      // Save to localStorage for tracking with quota management
-      try {
-        const existingCards = JSON.parse(localStorage.getItem('submitted-documents') || '[]');
-        existingCards.unshift(trackingCard);
-        
-        // Keep only the last 50 documents to prevent quota issues
-        const limitedCards = existingCards.slice(0, 50);
-        
-        // Try to save
-        try {
-          localStorage.setItem('submitted-documents', JSON.stringify(limitedCards));
-        } catch (quotaError) {
-          // If still quota exceeded, remove file data from older documents
-          console.warn('⚠️ Quota exceeded, removing file data from older documents');
-          const cardsWithoutOldFiles = limitedCards.map((card: any, index: number) => {
-            if (index > 10) { // Keep files only for newest 10 documents
-              return { ...card, files: [] };
-            }
-            return card;
-          });
-          localStorage.setItem('submitted-documents', JSON.stringify(cardsWithoutOldFiles));
-        }
-        
-        // ✅ Dispatch event for Track Documents to update in real-time
-        console.log('📢 [Approval Chain Bypass] Dispatching workflow-updated event for Track Documents');
-        window.dispatchEvent(new CustomEvent('workflow-updated', {
-          detail: { trackingCard }
-        }));
-        
-        // ✅ Dispatch storage event for cross-tab sync
-        window.dispatchEvent(new StorageEvent('storage', {
-          key: 'submitted-documents',
-          newValue: JSON.stringify(limitedCards)
-        }));
-      } catch (error) {
-        console.error('❌ Failed to save to submitted-documents:', error);
-        toast({
-          title: "Storage Warning",
-          description: "Document saved but file storage is limited due to space constraints.",
-          variant: "default"
-        });
-      }
+      // Broadcast tracking card creation via event (Supabase handles persistence)
+      console.log('📢 [Approval Chain Bypass] Dispatching workflow-updated event for Track Documents');
+      window.dispatchEvent(new CustomEvent('workflow-updated', {
+        detail: { trackingCard }
+      }));
+      window.dispatchEvent(new CustomEvent('tracking-card-created', { 
+        detail: { card: trackingCard } 
+      }));
       
       // Create approval card for Approval Center following "Budget Request – Lab Equipment" layout
       if (selectedRecipients.length > 0) {
@@ -584,37 +544,7 @@ export const WorkflowConfiguration: React.FC<WorkflowConfigurationProps> = ({ cl
           source: 'approval-chain-bypass' // Identify source for filtering
         };
         
-        // Save to localStorage for approvals with quota management
-        try {
-          const existingApprovals = JSON.parse(localStorage.getItem('pending-approvals') || '[]');
-          existingApprovals.unshift(approvalCard);
-          
-          // Keep only the last 50 approvals to prevent quota issues
-          const limitedApprovals = existingApprovals.slice(0, 50);
-          
-          // Try to save
-          try {
-            localStorage.setItem('pending-approvals', JSON.stringify(limitedApprovals));
-          } catch (quotaError) {
-            // If still quota exceeded, remove file data from older approvals
-            console.warn('⚠️ Quota exceeded, removing file data from older approvals');
-            const approvalsWithoutOldFiles = limitedApprovals.map((approval: any, index: number) => {
-              if (index > 10) { // Keep files only for newest 10 approvals
-                return { ...approval, files: [] };
-              }
-              return approval;
-            });
-            localStorage.setItem('pending-approvals', JSON.stringify(approvalsWithoutOldFiles));
-          }
-        } catch (error) {
-          console.error('❌ Failed to save to pending-approvals:', error);
-          toast({
-            title: "Storage Warning",
-            description: "Approval created but file storage is limited due to space constraints.",
-            variant: "default"
-          });
-        }
-        
+        // Approval card creation is handled via events (Supabase handles persistence)
         console.log('🔄 Creating Approval Chain Bypass approval card:', {
           id: approvalCard.id,
           title: approvalCard.title,

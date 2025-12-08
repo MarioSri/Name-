@@ -1,6 +1,49 @@
 {
-  "principal@school.edu": {
-    "ipfs_hash": "bafkreiev7d4g7qh5olxtdwypr5nfarr6f5xjhxjkdx2vb42i6kaowz6y5i",
-    "timestamp": "2024-01-16"
+  "hod-001": {
+    "ipfs_hash": "bafkreidl4tgaeevni24ssj4ncxdtmidcv5agkw5c7chn6mnuokp5gur7le",
+    "supabase_uuid": "8f02932c-5613-465a-a4e7-1b131304cd5a",
+    "name": "Sai",
+    "email": "chaitanyadandu04@gmail.com",
+    "timestamp": "2024-12-08"
+  },
+  "chaitanyadandu04@gmail.com": {
+    "ipfs_hash": "bafkreidl4tgaeevni24ssj4ncxdtmidcv5agkw5c7chn6mnuokp5gur7le",
+    "supabase_uuid": "8f02932c-5613-465a-a4e7-1b131304cd5a",
+    "name": "Sai",
+    "timestamp": "2024-12-08"
+  },
+  "8f02932c-5613-465a-a4e7-1b131304cd5a": {
+    "ipfs_hash": "bafkreidl4tgaeevni24ssj4ncxdtmidcv5agkw5c7chn6mnuokp5gur7le",
+    "user_id": "hod-001",
+    "name": "Sai",
+    "timestamp": "2024-12-08"
+  },
+  "principal-001": {
+    "ipfs_hash": null,
+    "supabase_uuid": "235cd89c-84ad-48ab-b05d-703d1f8bbcba",
+    "name": "Dr. Rajesh Kumar",
+    "email": "principal@hitam.edu.in",
+    "timestamp": "2024-12-08"
+  },
+  "registrar-001": {
+    "ipfs_hash": null,
+    "supabase_uuid": "0db16cfa-0b73-43ec-9efc-c87d1919854c",
+    "name": "Prof. Anitha Sharma",
+    "email": "registrar@hitam.edu.in",
+    "timestamp": "2024-12-08"
+  },
+  "dean-001": {
+    "ipfs_hash": null,
+    "supabase_uuid": "3488db3c-5507-4d77-a071-769bf22b2421",
+    "name": "Dr. Suresh Reddy",
+    "email": "dean@hitam.edu.in",
+    "timestamp": "2024-12-08"
+  },
+  "faculty-001": {
+    "ipfs_hash": null,
+    "supabase_uuid": "2a9f6f47-85b3-4192-a16a-4da5fec09d56",
+    "name": "Mr. Kiran Kumar",
+    "email": "faculty@hitam.edu.in",
+    "timestamp": "2024-12-08"
   }
 }

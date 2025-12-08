@@ -9,6 +9,8 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Bell, Plus, Calendar, Clock, AlertTriangle, CheckCircle2, Repeat, Tag, Edit, Trash2, SunSnow as Snooze, Play, Pause } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { useAuth } from "@/contexts/AuthContext";
+import { supabase } from "@/lib/supabase";
 
 interface Reminder {
   id: string;
@@ -38,11 +40,13 @@ interface SelfReminderSystemProps {
 }
 
 export const SelfReminderSystem: React.FC<SelfReminderSystemProps> = ({ userRole }) => {
+  const { user } = useAuth();
   const [reminders, setReminders] = useState<Reminder[]>([]);
   const [selectedReminder, setSelectedReminder] = useState<string | null>(null);
   const [isCreating, setIsCreating] = useState(false);
   const [filter, setFilter] = useState<'all' | 'pending' | 'completed' | 'overdue'>('all');
   const [categoryFilter, setCategoryFilter] = useState('');
+  const [isLoading, setIsLoading] = useState(true);
   
   const [newReminder, setNewReminder] = useState<Partial<Reminder>>({
     title: '',
@@ -72,21 +76,124 @@ export const SelfReminderSystem: React.FC<SelfReminderSystemProps> = ({ userRole
     urgent: 'bg-red-100 text-red-800 border-red-200'
   };
 
+  // Load reminders from Supabase
+  const loadReminders = async () => {
+    if (!user?.id) return;
+    
+    try {
+      setIsLoading(true);
+      const { data, error } = await supabase
+        .from('reminders')
+        .select('*')
+        .eq('user_id', user.id)
+        .order('due_date', { ascending: true });
+
+      if (error) throw error;
+
+      if (data) {
+        const mapped = data.map((r: any) => ({
+          id: r.id,
+          title: r.title,
+          description: r.description || '',
+          dueDate: r.due_date?.split('T')[0] || '',
+          dueTime: r.due_time || '',
+          priority: r.priority || 'medium',
+          category: r.category || 'general',
+          repeat: r.repeat_pattern || 'none',
+          customRepeat: r.custom_repeat,
+          completed: r.is_completed || false,
+          snoozedUntil: r.snoozed_until ? new Date(r.snoozed_until) : undefined,
+          createdAt: new Date(r.created_at),
+          notifications: r.notifications || { email: true, push: true, sound: false }
+        }));
+        setReminders(mapped);
+      }
+    } catch (error) {
+      console.error('Error loading reminders:', error);
+      // Fallback to localStorage
+      const savedReminders = localStorage.getItem('selfReminders');
+      if (savedReminders) {
+        const parsed = JSON.parse(savedReminders);
+        setReminders(parsed.map((reminder: any) => ({
+          ...reminder,
+          createdAt: new Date(reminder.createdAt),
+          snoozedUntil: reminder.snoozedUntil ? new Date(reminder.snoozedUntil) : undefined
+        })));
+      }
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   useEffect(() => {
-    const savedReminders = localStorage.getItem('selfReminders');
-    if (savedReminders) {
-      const parsed = JSON.parse(savedReminders);
-      setReminders(parsed.map((reminder: any) => ({
-        ...reminder,
-        createdAt: new Date(reminder.createdAt),
-        snoozedUntil: reminder.snoozedUntil ? new Date(reminder.snoozedUntil) : undefined
-      })));
+    loadReminders();
+
+    // Subscribe to real-time updates
+    if (user?.id) {
+      const channel = supabase
+        .channel(`reminders:${user.id}`)
+        .on('postgres_changes', {
+          event: '*',
+          schema: 'public',
+          table: 'reminders',
+          filter: `user_id=eq.${user.id}`
+        }, () => {
+          loadReminders();
+        })
+        .subscribe();
+
+      return () => {
+        supabase.removeChannel(channel);
+      };
     }
 
     // Check for due reminders every minute
     const interval = setInterval(checkDueReminders, 60000);
     return () => clearInterval(interval);
-  }, []);
+  }, [user?.id]);
+
+  // Save reminder to Supabase
+  const saveReminderToSupabase = async (reminder: Reminder) => {
+    if (!user?.id) return;
+
+    try {
+      const { error } = await supabase
+        .from('reminders')
+        .upsert({
+          id: reminder.id,
+          user_id: user.id,
+          title: reminder.title,
+          description: reminder.description,
+          due_date: reminder.dueDate,
+          due_time: reminder.dueTime,
+          priority: reminder.priority,
+          category: reminder.category,
+          repeat_pattern: reminder.repeat,
+          custom_repeat: reminder.customRepeat,
+          is_completed: reminder.completed,
+          snoozed_until: reminder.snoozedUntil?.toISOString(),
+          notifications: reminder.notifications
+        });
+
+      if (error) throw error;
+    } catch (error) {
+      console.error('Error saving reminder to Supabase:', error);
+    }
+  };
+
+  // Delete reminder from Supabase
+  const deleteReminderFromSupabase = async (reminderId: string) => {
+    try {
+      const { error } = await supabase
+        .from('reminders')
+        .delete()
+        .eq('id', reminderId);
+
+      if (error) throw error;
+    } catch (error) {
+      console.error('Error deleting reminder from Supabase:', error);
+    }
+  };
 
   const saveReminders = (newReminders: Reminder[]) => {
     setReminders(newReminders);
@@ -137,7 +244,7 @@ export const SelfReminderSystem: React.FC<SelfReminderSystemProps> = ({ userRole
     });
   };
 
-  const createReminder = () => {
+  const createReminder = async () => {
     if (!newReminder.title || !newReminder.dueDate || !newReminder.dueTime) {
       toast({
         title: "Missing Information",
@@ -166,6 +273,9 @@ export const SelfReminderSystem: React.FC<SelfReminderSystemProps> = ({ userRole
       }
     };
 
+    // Save to Supabase
+    await saveReminderToSupabase(reminder);
+
     const updatedReminders = [...reminders, reminder];
     saveReminders(updatedReminders);
     
@@ -191,14 +301,23 @@ export const SelfReminderSystem: React.FC<SelfReminderSystemProps> = ({ userRole
     });
   };
 
-  const updateReminder = (id: string, updates: Partial<Reminder>) => {
+  const updateReminder = async (id: string, updates: Partial<Reminder>) => {
     const updatedReminders = reminders.map(reminder =>
       reminder.id === id ? { ...reminder, ...updates } : reminder
     );
     saveReminders(updatedReminders);
+    
+    // Save to Supabase
+    const updatedReminder = updatedReminders.find(r => r.id === id);
+    if (updatedReminder) {
+      await saveReminderToSupabase(updatedReminder);
+    }
   };
 
-  const deleteReminder = (id: string) => {
+  const deleteReminder = async (id: string) => {
+    // Delete from Supabase
+    await deleteReminderFromSupabase(id);
+    
     const updatedReminders = reminders.filter(reminder => reminder.id !== id);
     saveReminders(updatedReminders);
     setSelectedReminder(null);
@@ -209,8 +328,8 @@ export const SelfReminderSystem: React.FC<SelfReminderSystemProps> = ({ userRole
     });
   };
 
-  const completeReminder = (id: string) => {
-    updateReminder(id, { completed: true });
+  const completeReminder = async (id: string) => {
+    await updateReminder(id, { completed: true });
     
     const reminder = reminders.find(r => r.id === id);
     if (reminder && reminder.repeat !== 'none') {

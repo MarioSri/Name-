@@ -199,14 +199,27 @@ class SupabaseWorkflowService {
       return data || [];
     }
 
-    // Get cards where user is current recipient
+    // Get recipient UUID from user_id if needed
+    let recipientUuid = recipientUserId;
+    if (!recipientUserId.match(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i)) {
+      const { data: recipient } = await supabase
+        .from('recipients')
+        .select('id')
+        .eq('user_id', recipientUserId)
+        .single();
+      if (recipient) {
+        recipientUuid = recipient.id;
+      }
+    }
+
+    // Get cards where user is current approver (correct column name)
     const { data: directCards, error: directError } = await supabase
       .from('approval_cards')
       .select(`
         *,
         recipients:approval_card_recipients(*)
       `)
-      .eq('current_recipient_id', recipientUserId)
+      .eq('current_approver_id', recipientUuid)
       .order('created_at', { ascending: false });
 
     if (directError) {
@@ -214,7 +227,7 @@ class SupabaseWorkflowService {
       throw directError;
     }
 
-    // Also get cards from junction table
+    // Also get cards from junction table - use recipient_id (UUID) not recipient_user_id
     const { data: junctionCards, error: junctionError } = await supabase
       .from('approval_card_recipients')
       .select(`
@@ -223,7 +236,7 @@ class SupabaseWorkflowService {
           recipients:approval_card_recipients(*)
         )
       `)
-      .eq('recipient_user_id', recipientUserId);
+      .eq('recipient_id', recipientUuid);
 
     if (junctionError) {
       console.error('❌ Error fetching junction approval cards:', junctionError);
@@ -234,7 +247,7 @@ class SupabaseWorkflowService {
     const allCards = [...(directCards || [])];
     const directIds = new Set(allCards.map(c => c.id));
     
-    junctionCards?.forEach(jc => {
+    junctionCards?.forEach((jc: any) => {
       if (jc.approval_card && !directIds.has(jc.approval_card.id)) {
         allCards.push(jc.approval_card);
       }

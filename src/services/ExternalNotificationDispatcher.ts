@@ -41,29 +41,39 @@ export interface NotificationContent {
   recipientName: string;
 }
 
+// In-memory preferences storage (preferences would come from Supabase user settings)
+const preferencesCache: Map<string, NotificationPreferences> = new Map();
+
 class ExternalNotificationDispatcherClass {
   /**
-   * Get recipient's notification preferences from localStorage
+   * Get recipient's notification preferences (from cache or defaults)
+   * Preferences should be loaded from Supabase user_settings table
    */
   private getRecipientPreferences(recipientId: string): NotificationPreferences | null {
     try {
-      // Try to get user-specific preferences
-      const userPrefs = localStorage.getItem(`notification-preferences-${recipientId}`);
-      if (userPrefs) {
-        return JSON.parse(userPrefs);
+      // Check in-memory cache first
+      const cachedPrefs = preferencesCache.get(recipientId);
+      if (cachedPrefs) {
+        return cachedPrefs;
       }
       
-      // Fallback to default preferences (if user is currently logged in)
-      const defaultPrefs = localStorage.getItem('notification-preferences');
-      if (defaultPrefs) {
-        return JSON.parse(defaultPrefs);
-      }
-      
-      return null;
+      // Return default preferences - actual preferences should come from Supabase
+      return {
+        email: true,
+        sms: false,
+        push: true
+      };
     } catch (error) {
       console.error('Error loading notification preferences:', error);
       return null;
     }
+  }
+  
+  /**
+   * Set recipient's notification preferences in cache
+   */
+  public setRecipientPreferences(recipientId: string, preferences: NotificationPreferences): void {
+    preferencesCache.set(recipientId, preferences);
   }
 
   /**

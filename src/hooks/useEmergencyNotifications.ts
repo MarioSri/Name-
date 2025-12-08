@@ -28,12 +28,13 @@ export const useEmergencyNotifications = () => {
   const [submissionLogs, setSubmissionLogs] = useState<EmergencySubmissionLog[]>([]);
   const [isLoading, setIsLoading] = useState(false);
 
-  // Load logs from localStorage
+  // Load logs from in-memory storage (emergencyNotificationService handles storage)
   useEffect(() => {
     const loadLogs = () => {
       try {
-        const notifications = JSON.parse(localStorage.getItem('emergency-notification-logs') || '[]');
-        const submissions = JSON.parse(localStorage.getItem('emergency-submissions') || '[]');
+        // Get logs from the service's in-memory storage
+        const notifications = emergencyNotificationService.getNotificationLogs();
+        const submissions = emergencyNotificationService.getSubmissionLogs();
         
         setNotificationLogs(notifications);
         setSubmissionLogs(submissions);
@@ -59,9 +60,9 @@ export const useEmergencyNotifications = () => {
     try {
       await emergencyNotificationService.sendEmergencyNotification(recipients, document, settings);
       
-      // Refresh logs after sending
-      const notifications = JSON.parse(localStorage.getItem('emergency-notification-logs') || '[]');
-      const submissions = JSON.parse(localStorage.getItem('emergency-submissions') || '[]');
+      // Refresh logs after sending from in-memory storage
+      const notifications = emergencyNotificationService.getNotificationLogs();
+      const submissions = emergencyNotificationService.getSubmissionLogs();
       
       setNotificationLogs(notifications);
       setSubmissionLogs(submissions);

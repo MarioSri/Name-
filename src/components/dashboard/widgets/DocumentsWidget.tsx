@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -66,9 +66,13 @@ export const DocumentsWidget: React.FC<DocumentsWidgetProps> = ({
   const [loading, setLoading] = useState(true);
   const [showAISummarizer, setShowAISummarizer] = useState(false);
   const [selectedDoc, setSelectedDoc] = useState<Document | null>(null);
+  
+  // Refs for debouncing
+  const fetchTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const isFetchingRef = useRef(false);
 
   // Helper function to check if current user is in recipients list
-  const isUserInRecipients = (doc: any): boolean => {
+  const isUserInRecipients = useCallback((doc: any): boolean => {
     // If no recipients specified, show to everyone (for backward compatibility)
     if (!doc.recipients || doc.recipients.length === 0) {
       return true;
@@ -131,12 +135,18 @@ export const DocumentsWidget: React.FC<DocumentsWidgetProps> = ({
       
       return false;
     });
-  };
+  }, [user]);
 
   useEffect(() => {
-    // Load Pending Approvals from Approval Center
+    // Load Pending Approvals from Approval Center with debouncing
     const fetchDocuments = async () => {
-      setLoading(true);
+      // Prevent concurrent fetches
+      if (isFetchingRef.current) {
+        console.log('⏳ [Dashboard] Fetch already in progress, skipping...');
+        return;
+      }
+      
+      isFetchingRef.current = true;
       
       // Only show pending approvals for non-employee roles
       let allPendingDocs: Document[] = [];
@@ -235,9 +245,19 @@ export const DocumentsWidget: React.FC<DocumentsWidgetProps> = ({
         allPendingDocs = [...approvalDocuments, ...staticPendingDocs];
       }
 
-      setTimeout(() => {
-        setDocuments(allPendingDocs);
-        setLoading(false);
+      // Update state and release lock
+      setDocuments(allPendingDocs);
+      setLoading(false);
+      isFetchingRef.current = false;
+    };
+    
+    // Debounced fetch function
+    const debouncedFetch = () => {
+      if (fetchTimeoutRef.current) {
+        clearTimeout(fetchTimeoutRef.current);
+      }
+      fetchTimeoutRef.current = setTimeout(() => {
+        fetchDocuments();
       }, 300);
     };
 
@@ -306,8 +326,8 @@ export const DocumentsWidget: React.FC<DocumentsWidgetProps> = ({
       }
     };
     
-    // Listen for storage changes to update in real-time
-    const handleStorageChange = () => fetchDocuments();
+    // Listen for storage changes to update in real-time (with debouncing)
+    const handleStorageChange = () => debouncedFetch();
     
     window.addEventListener('storage', handleStorageChange);
     window.addEventListener('approval-card-created', handleApprovalCardCreated);
@@ -315,12 +335,16 @@ export const DocumentsWidget: React.FC<DocumentsWidgetProps> = ({
     window.addEventListener('approval-card-status-changed', handleApprovalCardStatusChanged);
     
     return () => {
+      // Clear debounce timeout on cleanup
+      if (fetchTimeoutRef.current) {
+        clearTimeout(fetchTimeoutRef.current);
+      }
       window.removeEventListener('storage', handleStorageChange);
       window.removeEventListener('approval-card-created', handleApprovalCardCreated);
       window.removeEventListener('document-approval-created', handleApprovalCardCreated);
       window.removeEventListener('approval-card-status-changed', handleApprovalCardStatusChanged);
     };
-  }, [userRole, user]);
+  }, [userRole, user, isUserInRecipients]);
 
   const getFilteredDocuments = () => {
     switch (filter) {

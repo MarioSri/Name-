@@ -58,7 +58,11 @@ export class DecentralizedChatService extends SimpleEventEmitter {
   private messageQueue: ChatMessage[] = [];
   private offlineMode = false;
   
-  // Local storage keys
+  // In-memory storage (replacing localStorage)
+  private static encryptionKeys: { publicKey: string; privateKey: string } | null = null;
+  private static offlineDataStorage: Map<string, any[]> = new Map();
+  
+  // Storage keys (for in-memory storage organization)
   private static readonly STORAGE_KEYS = {
     CHANNELS: 'chat_channels',
     MESSAGES: 'chat_messages',
@@ -596,9 +600,8 @@ export class DecentralizedChatService extends SimpleEventEmitter {
 
   // Encryption (basic implementation)
   private setupEncryption(): void {
-    // Generate or retrieve encryption keys
-    const keys = localStorage.getItem(DecentralizedChatService.STORAGE_KEYS.ENCRYPTION_KEYS);
-    if (!keys) {
+    // Generate or retrieve encryption keys from in-memory storage
+    if (!DecentralizedChatService.encryptionKeys) {
       this.generateEncryptionKeys();
     }
   }
@@ -610,10 +613,7 @@ export class DecentralizedChatService extends SimpleEventEmitter {
       privateKey: this.generateId()
     };
     
-    localStorage.setItem(
-      DecentralizedChatService.STORAGE_KEYS.ENCRYPTION_KEYS, 
-      JSON.stringify(keyPair)
-    );
+    DecentralizedChatService.encryptionKeys = keyPair;
   }
 
   private encryptMessage(message: string, recipientPublicKey: string): string {
@@ -651,7 +651,9 @@ export class DecentralizedChatService extends SimpleEventEmitter {
   }
 
   private getAuthToken(): string {
-    return localStorage.getItem('auth_token') || '';
+    // Auth token should come from Supabase session, not localStorage
+    // This is handled by the Supabase client automatically
+    return '';
   }
 
   public sendWebSocketMessage(event: ChatEvent): void {
@@ -712,13 +714,15 @@ export class DecentralizedChatService extends SimpleEventEmitter {
   }
 
   private storeOfflineData(key: string, data: any): void {
-    const existingData = JSON.parse(localStorage.getItem(`${DecentralizedChatService.STORAGE_KEYS.MESSAGES}_${key}`) || '[]');
+    const storageKey = `${DecentralizedChatService.STORAGE_KEYS.MESSAGES}_${key}`;
+    const existingData = DecentralizedChatService.offlineDataStorage.get(storageKey) || [];
     existingData.push(data);
-    localStorage.setItem(`${DecentralizedChatService.STORAGE_KEYS.MESSAGES}_${key}`, JSON.stringify(existingData));
+    DecentralizedChatService.offlineDataStorage.set(storageKey, existingData);
   }
 
   private getOfflineData(key: string): any[] {
-    return JSON.parse(localStorage.getItem(`${DecentralizedChatService.STORAGE_KEYS.MESSAGES}_${key}`) || '[]');
+    const storageKey = `${DecentralizedChatService.STORAGE_KEYS.MESSAGES}_${key}`;
+    return DecentralizedChatService.offlineDataStorage.get(storageKey) || [];
   }
 
   private queueOfflineAction(action: string, data: any): void {

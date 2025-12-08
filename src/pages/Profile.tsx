@@ -38,10 +38,13 @@ import { PersonalInformationForm, PersonalInfoData } from "@/components/Personal
 import { supabaseWorkflowService } from "@/services/SupabaseWorkflowService";
 
 const Profile = () => {
-  const { user } = useAuth();
+  const { user, logout } = useAuth();
   const [isEditing, setIsEditing] = useState(false);
   const { theme, setTheme } = useTheme();
   const [loading, setLoading] = useState(true);
+  const { toast } = useToast();
+  const navigate = useNavigate();
+  const fileInputRef = useRef<HTMLInputElement>(null);
   
   const [profileData, setProfileData] = useState<PersonalInfoData>({
     name: "",
@@ -53,61 +56,6 @@ const Profile = () => {
     bio: "",
     avatar: ""
   });
-
-  // Load profile data from Supabase recipients table
-  useEffect(() => {
-    const loadProfileData = async () => {
-      if (!user) return;
-      
-      setLoading(true);
-      try {
-        // Get recipient data from Supabase by user_id or email
-        const recipient = await supabaseWorkflowService.getRecipientById(user.id || user.email);
-        
-        if (recipient) {
-          // Map Supabase recipient data to profile
-          setProfileData({
-            name: recipient.name || "",
-            email: recipient.email || "",
-            phone: recipient.phone || "",
-            department: recipient.department || "",
-            employeeId: recipient.user_id || "",
-            designation: recipient.role_title || recipient.role || "",
-            bio: recipient.bio || "",
-            avatar: recipient.avatar || ""
-          });
-        } else {
-          toast({
-            title: "Profile Not Found",
-            description: "No profile data found in database. Please contact administrator.",
-            variant: "destructive"
-          });
-        }
-      } catch (error) {
-        console.error('Error loading recipient data:', error);
-        toast({
-          title: "Error Loading Profile",
-          description: "Failed to load profile data from database.",
-          variant: "destructive"
-        });
-      } finally {
-        setLoading(false);
-      }
-    };
-    
-    loadProfileData();
-
-    // Load notification preferences
-    const savedNotificationPrefs = localStorage.getItem(`user-preferences-${user?.id || 'default'}`);
-    if (savedNotificationPrefs) {
-      try {
-        const parsedPrefs = JSON.parse(savedNotificationPrefs);
-        setNotificationPreferences(parsedPrefs);
-      } catch (error) {
-        console.error('Error loading notification preferences:', error);
-      }
-    }
-  }, [user]);
 
   const [preferences, setPreferences] = useState({
     emailNotifications: true,
@@ -125,16 +73,83 @@ const Profile = () => {
     whatsapp: { enabled: false, interval: 1, unit: 'hours' }
   });
 
-  const { toast } = useToast();
-  const navigate = useNavigate();
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  // Load profile data from Supabase recipients table
+  useEffect(() => {
+    const loadProfileData = async () => {
+      if (!user) {
+        setLoading(false);
+        return;
+      }
+      
+      setLoading(true);
+      try {
+        // Get recipient data from Supabase by user_id or email
+        const recipient = await supabaseWorkflowService.getRecipientById(user.id || user.email);
+        
+        if (recipient) {
+          // Map Supabase recipient data to profile
+          setProfileData({
+            name: recipient.name || user.name || "",
+            email: recipient.email || user.email || "",
+            phone: recipient.phone || "",
+            department: recipient.department || user.department || "",
+            employeeId: recipient.user_id || user.id || "",
+            designation: recipient.role_title || recipient.role || "",
+            bio: recipient.bio || "",
+            avatar: recipient.avatar || user.avatar || ""
+          });
+        } else {
+          // Use user data from auth context as fallback
+          setProfileData({
+            name: user.name || "",
+            email: user.email || "",
+            phone: "",
+            department: user.department || "",
+            employeeId: user.id || "",
+            designation: user.role || "",
+            bio: "",
+            avatar: user.avatar || ""
+          });
+          console.warn('Profile: No recipient found in database, using auth context data');
+        }
+      } catch (error) {
+        console.error('Error loading recipient data:', error);
+        // Use user data from auth context as fallback
+        setProfileData({
+          name: user.name || "",
+          email: user.email || "",
+          phone: "",
+          department: user.department || "",
+          employeeId: user.id || "",
+          designation: user.role || "",
+          bio: "",
+          avatar: user.avatar || ""
+        });
+      } finally {
+        setLoading(false);
+      }
+    };
+    
+    loadProfileData();
 
-  const handleLogout = () => {
-    toast({
-      title: "Logged Out",
-      description: "You have been successfully logged out.",
-    });
-    navigate("/");
+    // Load notification preferences from state (Supabase TODO)
+    // Preferences now managed in-memory, can be extended to Supabase
+  }, [user]);
+
+  const handleLogout = async () => {
+    try {
+      await logout();
+      toast({
+        title: "Logged Out",
+        description: "You have been successfully logged out.",
+      });
+      navigate("/", { replace: true });
+    } catch (error) {
+      console.error('Logout error:', error);
+      // Force navigate even if logout fails
+      sessionStorage.clear();
+      navigate("/", { replace: true });
+    }
   };
 
   const handleSaveProfile = async (data: PersonalInfoData) => {
@@ -187,15 +202,7 @@ const Profile = () => {
       }
     }));
 
-    // Save to localStorage immediately
-    const updated = {
-      ...notificationPreferences,
-      [channel]: {
-        ...notificationPreferences[channel as keyof typeof notificationPreferences],
-        [field]: value
-      }
-    };
-    localStorage.setItem(`user-preferences-${user?.id || 'default'}`, JSON.stringify(updated));
+    // Update state only - no localStorage (TODO: save to Supabase)
 
     toast({
       title: "Notification Preference Updated",
@@ -203,14 +210,20 @@ const Profile = () => {
     });
   };
 
-  const handleSignOut = () => {
-    toast({
-      title: "Signing Out",
-      description: "Redirecting to login page...",
-    });
-    setTimeout(() => {
-      navigate("/");
-    }, 1000);
+  const handleSignOut = async () => {
+    try {
+      toast({
+        title: "Signing Out",
+        description: "Redirecting to login page...",
+      });
+      await logout();
+      navigate("/", { replace: true });
+    } catch (error) {
+      console.error('Sign out error:', error);
+      // Force navigate even if logout fails
+      sessionStorage.clear();
+      navigate("/", { replace: true });
+    }
   };
 
   const handleImageUpload = (event: React.ChangeEvent<HTMLInputElement>) => {

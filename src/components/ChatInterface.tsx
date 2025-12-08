@@ -161,22 +161,6 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ className, channel
     if (!user) return [];
     return [
       {
-        id: 'general',
-        name: 'General',
-        members: [user.id, 'principal', 'registrar', 'hod-cse', 'dean'],
-        isPrivate: false,
-        createdAt: new Date(),
-        createdBy: user.id
-      },
-      {
-        id: 'admin-council',
-        name: 'Administrative Council',
-        members: [user.id, 'principal', 'registrar', 'dean'],
-        isPrivate: false,
-        createdAt: new Date(),
-        createdBy: user.id
-      },
-      {
         id: 'faculty-board',
         name: 'Faculty Board',
         members: [user.id, 'hod-cse', 'hod-eee', 'dean'],
@@ -187,13 +171,11 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ className, channel
     ];
   }, [user]);
 
-  // Memoized users for instant loading
+  // Memoized users for instant loading - fetched from database
   const defaultUsers = useMemo(() => {
     if (!user) return [];
     return [
-      { id: 'user-1', fullName: 'Dr. Principal', role: 'Principal', avatar: '' },
-      { id: 'user-2', fullName: 'Prof. Registrar', role: 'Registrar', avatar: '' },
-      { id: user.id, fullName: user.fullName || 'You', role: user.role, avatar: '' }
+      { id: user.id, fullName: user.name || 'You', role: user.role, avatar: '' }
     ];
   }, [user]);
 
@@ -275,51 +257,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ className, channel
     };
   }, [user, defaultChannels, defaultUsers, chatService]);
 
-  // Memoized sample messages for instant loading
-  const getSampleMessages = useCallback((channelId: string) => [
-    {
-      id: 'msg-1',
-      channelId,
-      senderId: 'user-1',
-      content: 'Here are the project documents',
-      type: 'file' as MessageType,
-      timestamp: new Date(Date.now() - 3600000),
-      status: 'delivered',
-      reactions: [],
-      attachments: [
-        {
-          id: 'att-1',
-          name: 'project-report.pdf',
-          url: 'mock://project-report.pdf',
-          type: 'document' as MessageType,
-          size: 2048576,
-          mimeType: 'application/pdf'
-        }
-      ],
-      metadata: {}
-    },
-    {
-      id: 'msg-2',
-      channelId,
-      senderId: 'user-2',
-      content: 'Meeting photos from yesterday',
-      type: 'image' as MessageType,
-      timestamp: new Date(Date.now() - 1800000),
-      status: 'delivered',
-      reactions: [],
-      attachments: [
-        {
-          id: 'att-2',
-          name: 'meeting-photo.jpg',
-          url: 'mock://meeting-photo.jpg',
-          type: 'image' as MessageType,
-          size: 1024000,
-          mimeType: 'image/jpeg'
-        }
-      ],
-      metadata: {}
-    }
-  ], []);
+  // Memoized sample messages - empty, real messages come from Supabase
+  const getSampleMessages = useCallback((channelId: string) => [], []);
 
   const scrollToBottom = useCallback((force = false) => {
     if (force) {
@@ -1390,9 +1329,7 @@ Generated on: ${new Date().toLocaleString()}`;
         <div className="p-2 space-y-1">
           {/* Add default channels with message counts if none exist */}
           {channels.length === 0 && [
-            { id: 'admin-council', name: 'Administrative Council', isPrivate: false, members: ['user-1', 'principal', 'registrar', 'dean'], createdAt: new Date(), createdBy: 'user-1' },
-            { id: 'faculty-board', name: 'Faculty Board', isPrivate: false, members: ['user-1', 'hod-cse', 'hod-eee', 'dean'], createdAt: new Date(), createdBy: 'user-1' },
-            { id: 'general', name: 'General', isPrivate: false, members: ['user-1', 'principal', 'registrar', 'hod-cse', 'dean'], createdAt: new Date(), createdBy: 'user-1' }
+            { id: 'faculty-board', name: 'Faculty Board', isPrivate: false, members: ['user-1', 'hod-cse', 'hod-eee', 'dean'], createdAt: new Date(), createdBy: 'user-1' }
           ].map(channel => (
             <div key={channel.id} className="flex items-center gap-1">
               {deleteMode && (

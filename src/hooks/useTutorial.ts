@@ -81,6 +81,15 @@ const TUTORIAL_STEPS: TutorialStep[] = [
   }
 ];
 
+// In-memory tutorial state (replaces localStorage)
+let tutorialCompletedState = false;
+let isFirstLoginState = false;
+
+// Set first login state (called from auth context)
+export function setFirstLogin(isFirst: boolean) {
+  isFirstLoginState = isFirst;
+}
+
 export function useTutorial() {
   const [isActive, setIsActive] = useState(false);
   const [currentStep, setCurrentStep] = useState(0);
@@ -88,14 +97,11 @@ export function useTutorial() {
 
   // Check if tutorial should be shown on mount
   useEffect(() => {
-    const tutorialCompleted = localStorage.getItem('tutorialCompleted');
-    const isFirstLogin = localStorage.getItem('isFirstLogin');
-    
-    if (!tutorialCompleted && isFirstLogin === 'true') {
+    if (!tutorialCompletedState && isFirstLoginState) {
       setIsActive(true);
-      localStorage.removeItem('isFirstLogin');
+      isFirstLoginState = false;
     } else {
-      setIsCompleted(!!tutorialCompleted);
+      setIsCompleted(tutorialCompletedState);
     }
   }, []);
 
@@ -103,7 +109,7 @@ export function useTutorial() {
     setIsActive(true);
     setCurrentStep(0);
     setIsCompleted(false);
-    localStorage.removeItem('tutorialCompleted');
+    tutorialCompletedState = false;
   };
 
   const nextStep = () => {
@@ -127,7 +133,7 @@ export function useTutorial() {
   const completeTutorial = () => {
     setIsActive(false);
     setIsCompleted(true);
-    localStorage.setItem('tutorialCompleted', 'true');
+    tutorialCompletedState = true;
   };
 
   const getCurrentStep = () => TUTORIAL_STEPS[currentStep];

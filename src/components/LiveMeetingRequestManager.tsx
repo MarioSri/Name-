@@ -316,7 +316,7 @@ export const LiveMeetingRequestManager: React.FC = () => {
       <div className="space-y-4">
         <div className="space-y-4">
           {JSON.parse(localStorage.getItem('livemeet-requests') || '[]')
-            .filter((request: any) => !request.title.includes('Approval Request'))
+            .filter((request: any) => !request.title.includes('Approval Request') && request.title !== 'ff')
             .map((request: any) => {
             const sourceDocuments = {
               'Faculty Meeting Minutes – Q4 2024': { type: 'Circular', date: '2024-01-15' },

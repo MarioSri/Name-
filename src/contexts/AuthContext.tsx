@@ -3,7 +3,8 @@ import { supabase } from '@/lib/supabase';
 import { supabaseWorkflowService } from '@/services/SupabaseWorkflowService';
 
 export interface User {
-  id: string;
+  id: string;          // user_id from recipients table (e.g., "principal-001")
+  supabaseUuid?: string; // UUID from recipients.id column (for foreign keys)
   name: string;
   email: string;
   role: 'principal' | 'registrar' | 'hod' | 'program-head' | 'employee';
@@ -88,6 +89,9 @@ const getUserPermissions = (role: string) => {
 };
 
 export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
+  // Track if user was loaded from sessionStorage
+  const [initialUserLoaded, setInitialUserLoaded] = useState(false);
+  
   // Initialize user from sessionStorage immediately to avoid loading state
   const [user, setUser] = useState<User | null>(() => {
     const savedUser = sessionStorage.getItem('iaoms-user');
@@ -110,7 +114,12 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     }
     return null;
   });
-  const [isLoading, setIsLoading] = useState(true);
+  
+  // If user was loaded from sessionStorage, don't show loading state
+  const [isLoading, setIsLoading] = useState(() => {
+    const savedUser = sessionStorage.getItem('iaoms-user');
+    return !savedUser; // Only loading if no saved user
+  });
 
   const isAuthenticated = !!user;
 
@@ -181,7 +190,8 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       // Create user object from Supabase recipient data
       const roleKey = recipient.role_type?.toLowerCase().replace(' ', '-') || 'employee';
       const authenticatedUser: User = {
-        id: recipient.user_id,
+        id: recipient.user_id,          // user_id like "principal-001"
+        supabaseUuid: recipient.id,     // UUID for foreign key references
         name: recipient.name,
         email: recipient.email,
         role: roleKey as User['role'],
@@ -194,6 +204,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
 
       console.log('✅ [AuthContext] User authenticated via email:', {
         id: authenticatedUser.id,
+        supabaseUuid: authenticatedUser.supabaseUuid,
         name: authenticatedUser.name,
         role: authenticatedUser.role
       });
@@ -214,13 +225,10 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     setIsLoading(true);
     
     try {
-      // Get all recipients from Supabase and find one matching the role
-      const recipients = await supabaseWorkflowService.getRecipients();
-      
       // Map role to role_type in database
       const roleTypeMap: { [key: string]: string } = {
-        'principal': 'Principal',
-        'registrar': 'Registrar',
+        'principal': 'PRINCIPAL',
+        'registrar': 'REGISTRAR',
         'hod': 'HOD',
         'program-head': 'Program Head',
         'employee': 'EMPLOYEE'
@@ -228,29 +236,98 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       
       const roleType = roleTypeMap[role] || 'EMPLOYEE';
       
-      // Find a recipient matching the role
-      const recipient = recipients.find(r => 
-        r.role === roleType || 
-        r.role_type === roleType ||
-        (roleType === 'EMPLOYEE' && r.role_type === 'EMPLOYEE')
-      );
-      
-      if (!recipient) {
-        throw new Error(`No user found with role: ${role}. Please seed the database first.`);
+      // Try to get recipients from Supabase
+      let recipient = null;
+      try {
+        const recipients = await supabaseWorkflowService.getRecipients();
+        
+        // Find a recipient matching the role
+        recipient = recipients.find(r => 
+          r.role === roleType || 
+          r.role_type === roleType ||
+          r.role?.toUpperCase() === roleType.toUpperCase() ||
+          r.role_type?.toUpperCase() === roleType.toUpperCase() ||
+          (roleType === 'EMPLOYEE' && (r.role_type === 'EMPLOYEE' || r.role === 'EMPLOYEE'))
+        );
+        
+        console.log('📋 [AuthContext] Found recipients:', recipients.length, 'Matched:', recipient?.name, 'UUID:', recipient?.id);
+      } catch (supabaseError) {
+        console.warn('⚠️ [AuthContext] Supabase unavailable, using fallback:', supabaseError);
       }
       
-      // Create user object from Supabase data
-      const authenticatedUser: User = {
-        id: recipient.user_id,
-        name: recipient.name,
-        email: recipient.email,
-        role: role as User['role'],
-        department: recipient.department,
-        branch: recipient.branch,
-        avatar: recipient.avatar,
-        google_id: recipient.google_id,
-        permissions: getUserPermissions(role)
-      };
+      // Create user object - use Supabase data if available, otherwise use fallback
+      let authenticatedUser: User;
+      
+      if (recipient) {
+        // Use data from Supabase - include UUID for foreign key references
+        authenticatedUser = {
+          id: recipient.user_id,          // user_id like "principal-001"
+          supabaseUuid: recipient.id,     // UUID from recipients.id column
+          name: recipient.name,
+          email: recipient.email,
+          role: role as User['role'],
+          department: recipient.department,
+          branch: recipient.branch,
+          avatar: recipient.avatar,
+          google_id: recipient.google_id,
+          permissions: getUserPermissions(role)
+        };
+      } else {
+        // Fallback demo users when Supabase is unavailable or empty
+        // NOTE: For production, replace these with real institutional users in the seed file
+        // and configure Google OAuth. These are only for development/testing.
+        const fallbackUsers: { [key: string]: Partial<User> } = {
+          'principal': {
+            id: 'principal-001',
+            name: 'Dr. Principal (Demo)',
+            email: 'principal@demo.edu',
+            department: 'Administration',
+            branch: 'Main Campus',
+          },
+          'registrar': {
+            id: 'registrar-001',
+            name: 'Prof. Registrar (Demo)',
+            email: 'registrar@demo.edu',
+            department: 'Administration',
+            branch: 'Main Campus',
+          },
+          'hod': {
+            id: 'hod-cse-001',
+            name: 'Dr. HOD CSE (Demo)',
+            email: 'hod.cse@demo.edu',
+            department: 'Computer Science',
+            branch: 'Main Campus',
+          },
+          'program-head': {
+            id: 'program-head-cse-001',
+            name: 'Prof. Program Head (Demo)',
+            email: 'ph.cse@demo.edu',
+            department: 'Computer Science',
+            branch: 'Main Campus',
+          },
+          'employee': {
+            id: 'faculty-cse-001',
+            name: 'Mr. Faculty (Demo)',
+            email: 'faculty.cse@demo.edu',
+            department: 'Computer Science',
+            branch: 'Main Campus',
+          },
+        };
+        
+        const fallback = fallbackUsers[role] || fallbackUsers['employee'];
+        
+        authenticatedUser = {
+          id: fallback.id!,
+          name: fallback.name!,
+          email: fallback.email!,
+          role: role as User['role'],
+          department: fallback.department,
+          branch: fallback.branch,
+          permissions: getUserPermissions(role)
+        };
+        
+        console.warn('⚠️ [AuthContext] Using fallback user data (Supabase recipients table may be empty)');
+      }
 
       console.log('✅ [AuthContext] User authenticated:', {
         id: authenticatedUser.id,
@@ -270,17 +347,30 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   };
 
   const logout = async () => {
+    console.log('🚪 [AuthContext] Logging out...');
+    
+    // Clear state first
+    setUser(null);
+    setIsLoading(false);
+    
+    // Clear all session storage
+    sessionStorage.removeItem('iaoms-user');
+    sessionStorage.clear();
+    
+    // Also clear any localStorage auth data
+    localStorage.removeItem('iaoms-user');
+    localStorage.removeItem('iaoms-redirect-path');
+    
     try {
       // Sign out from Supabase auth if using Google OAuth
       await supabase.auth.signOut();
+      console.log('✅ [AuthContext] Supabase signout successful');
     } catch (error) {
-      console.error('Supabase signout error:', error);
+      console.error('⚠️ [AuthContext] Supabase signout error:', error);
+      // Continue anyway - local state is already cleared
     }
     
-    setUser(null);
-    setIsLoading(false);
-    sessionStorage.removeItem('iaoms-user');
-    sessionStorage.clear();
+    console.log('✅ [AuthContext] Logout complete');
   };
 
   // Listen for Supabase auth state changes (Google OAuth callback)
@@ -291,36 +381,39 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       if (event === 'SIGNED_IN' && session?.user) {
         const googleUser = session.user;
         
+        // Get the pending role selected before OAuth redirect
+        const pendingRole = sessionStorage.getItem('pending-role') || 'employee';
+        sessionStorage.removeItem('pending-role');
+        
         try {
-          // Check if user exists in recipients table
+          // Check if user exists in recipients table by email
           let recipient = await supabaseWorkflowService.getRecipientById(googleUser.email || '');
           
           if (!recipient) {
-            // Create new recipient for this Google user (default to employee)
-            console.log('📝 Creating new recipient for Google user:', googleUser.email);
-            recipient = await supabaseWorkflowService.createRecipient({
-              user_id: googleUser.id,
-              google_id: googleUser.id,
-              name: googleUser.user_metadata?.full_name || googleUser.email?.split('@')[0] || 'User',
-              email: googleUser.email || '',
-              role: 'EMPLOYEE',
-              role_type: 'EMPLOYEE',
-              avatar: googleUser.user_metadata?.avatar_url,
-            });
-          } else {
-            // Update google_id if not set
-            if (!recipient.google_id) {
-              await supabaseWorkflowService.updateRecipient(recipient.email, {
-                google_id: googleUser.id,
-                avatar: recipient.avatar || googleUser.user_metadata?.avatar_url,
-              });
-            }
+            // User not in system - deny access (no signup)
+            console.error('❌ User not found in institutional database:', googleUser.email);
+            await supabase.auth.signOut();
+            setUser(null);
+            sessionStorage.removeItem('iaoms-user');
+            // Show error - would need a toast or error state
+            alert(`Access Denied: ${googleUser.email} is not registered in the institutional system. Please contact the administrator.`);
+            setIsLoading(false);
+            return;
           }
           
-          // Create authenticated user
+          // Update google_id if not set (first time Google login for existing user)
+          if (!recipient.google_id) {
+            await supabaseWorkflowService.updateRecipient(recipient.email, {
+              google_id: googleUser.id,
+              avatar: recipient.avatar || googleUser.user_metadata?.avatar_url,
+            });
+          }
+          
+          // Use role from recipient (ignore pending role - use institutional role)
           const roleKey = recipient.role_type?.toLowerCase().replace(' ', '-') || 'employee';
           const authenticatedUser: User = {
             id: recipient.user_id,
+            supabaseUuid: recipient.id,   // UUID for foreign key references
             name: recipient.name,
             email: recipient.email,
             role: roleKey as User['role'],
@@ -333,7 +426,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
           
           setUser(authenticatedUser);
           sessionStorage.setItem('iaoms-user', JSON.stringify(authenticatedUser));
-          console.log('✅ Google user authenticated:', authenticatedUser.name);
+          console.log('✅ Google user authenticated:', authenticatedUser.name, 'Role:', authenticatedUser.role);
           
         } catch (error) {
           console.error('Failed to process Google login:', error);
@@ -346,9 +439,14 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       setIsLoading(false);
     });
 
-    // Check initial session
+    // Check initial session - only set loading to false if no saved user
     supabase.auth.getSession().then(({ data: { session } }) => {
-      if (!session && !sessionStorage.getItem('iaoms-user')) {
+      const hasSavedUser = sessionStorage.getItem('iaoms-user');
+      if (!session && !hasSavedUser) {
+        setIsLoading(false);
+      } else if (hasSavedUser && !session) {
+        // User was loaded from sessionStorage, not from Supabase OAuth
+        // isLoading is already false from initialization
         setIsLoading(false);
       }
     });

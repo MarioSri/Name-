@@ -101,46 +101,50 @@ export const filterMeetingsByRecipient = (
 };
 
 /**
- * Saves meetings to localStorage
+ * In-memory meeting storage (replaces localStorage)
+ * TODO: Migrate to Supabase for persistent meeting storage
+ */
+const meetingStore: Map<string, Meeting> = new Map();
+
+/**
+ * Saves meetings to in-memory store
  * @param meetings - Array of meetings to save
  */
 export const saveMeetingsToStorage = (meetings: Meeting[]): void => {
   try {
-    localStorage.setItem('meetings', JSON.stringify(meetings));
-    console.log(`[Meeting Storage] Saved ${meetings.length} meetings to localStorage`);
+    meetingStore.clear();
+    meetings.forEach(m => meetingStore.set(m.id, m));
+    console.log(`[Meeting Storage] Saved ${meetings.length} meetings to memory`);
   } catch (error) {
-    console.error('[Meeting Storage] Error saving to localStorage:', error);
+    console.error('[Meeting Storage] Error saving to memory:', error);
   }
 };
 
 /**
- * Loads meetings from localStorage
+ * Loads meetings from in-memory store
  * @returns Array of meetings from storage
  */
 export const loadMeetingsFromStorage = (): Meeting[] => {
   try {
-    const stored = localStorage.getItem('meetings');
-    if (!stored) {
-      console.log('[Meeting Storage] No meetings found in localStorage');
+    const meetings = Array.from(meetingStore.values());
+    if (meetings.length === 0) {
+      console.log('[Meeting Storage] No meetings found in memory');
       return [];
     }
-    const meetings = JSON.parse(stored);
-    console.log(`[Meeting Storage] Loaded ${meetings.length} meetings from localStorage`);
+    console.log(`[Meeting Storage] Loaded ${meetings.length} meetings from memory`);
     return meetings;
   } catch (error) {
-    console.error('[Meeting Storage] Error loading from localStorage:', error);
+    console.error('[Meeting Storage] Error loading from memory:', error);
     return [];
   }
 };
 
 /**
- * Adds a new meeting to localStorage
+ * Adds a new meeting to in-memory store
  * @param meeting - Meeting to add
  */
 export const addMeetingToStorage = (meeting: Meeting): void => {
-  const existingMeetings = loadMeetingsFromStorage();
-  const updatedMeetings = [meeting, ...existingMeetings];
-  saveMeetingsToStorage(updatedMeetings);
+  meetingStore.set(meeting.id, meeting);
   
   // Dispatch custom event for cross-component updates
   window.dispatchEvent(new CustomEvent('meetings-updated', { detail: meeting }));
@@ -148,28 +152,25 @@ export const addMeetingToStorage = (meeting: Meeting): void => {
 };
 
 /**
- * Updates an existing meeting in localStorage
+ * Updates an existing meeting in in-memory store
  * @param meetingId - ID of meeting to update
  * @param updatedMeeting - Updated meeting data
  */
 export const updateMeetingInStorage = (meetingId: string, updatedMeeting: Partial<Meeting>): void => {
-  const existingMeetings = loadMeetingsFromStorage();
-  const updatedMeetings = existingMeetings.map(m => 
-    m.id === meetingId ? { ...m, ...updatedMeeting } : m
-  );
-  saveMeetingsToStorage(updatedMeetings);
+  const existing = meetingStore.get(meetingId);
+  if (existing) {
+    meetingStore.set(meetingId, { ...existing, ...updatedMeeting });
+  }
   window.dispatchEvent(new CustomEvent('meetings-updated', { detail: updatedMeeting }));
   console.log(`[Meeting Storage] Updated meeting ${meetingId}`);
 };
 
 /**
- * Deletes a meeting from localStorage
+ * Deletes a meeting from in-memory store
  * @param meetingId - ID of meeting to delete
  */
 export const deleteMeetingFromStorage = (meetingId: string): void => {
-  const existingMeetings = loadMeetingsFromStorage();
-  const updatedMeetings = existingMeetings.filter(m => m.id !== meetingId);
-  saveMeetingsToStorage(updatedMeetings);
+  meetingStore.delete(meetingId);
   window.dispatchEvent(new CustomEvent('meetings-updated', { detail: { id: meetingId } }));
   console.log(`[Meeting Storage] Deleted meeting ${meetingId}`);
 };

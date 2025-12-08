@@ -25,33 +25,24 @@ const Approvals = () => {
   const { toast } = useToast();
   const navigate = useNavigate();
   
-  // Try Supabase first, fallback to localStorage-based system
+  // USE SUPABASE ONLY - NO localStorage fallback
   const supabaseHook = useSupabaseRealTimeDocuments();
-  const localStorageHook = useRealTimeDocuments();
   
-  // Use Supabase if connected, otherwise fallback to localStorage
-  const isUsingSupabase = supabaseHook.isConnected;
+  // Always use Supabase
   const {
     approvalCards,
+    trackDocuments,
     loading,
     error
-  } = isUsingSupabase ? supabaseHook : localStorageHook;
+  } = supabaseHook;
   
-  // Create unified approve/reject functions
+  // Create unified approve/reject functions - Supabase only
   const approveDocument = async (documentId: string, comments?: string) => {
-    if (isUsingSupabase) {
-      await supabaseHook.approveDocument(documentId, comments);
-    } else {
-      await localStorageHook.approveDocument(documentId, comments);
-    }
+    await supabaseHook.approveDocument(documentId, comments);
   };
   
   const rejectDocument = async (documentId: string, reason: string) => {
-    if (isUsingSupabase) {
-      await supabaseHook.rejectDocument(documentId, reason);
-    } else {
-      await localStorageHook.rejectDocument(documentId, reason);
-    }
+    await supabaseHook.rejectDocument(documentId, reason);
   };
   const [showLiveMeetingModal, setShowLiveMeetingModal] = useState(false);
   const [selectedDocument, setSelectedDocument] = useState({ id: '', type: 'letter', title: '' });
@@ -66,27 +57,14 @@ const Approvals = () => {
   const [viewingFile, setViewingFile] = useState<File | null>(null);
   const [viewingFiles, setViewingFiles] = useState<File[]>([]);
   
+  // Clear localStorage quota issues on mount
+  // No localStorage cleanup needed - using Supabase only
+  
   useEffect(() => {
-    const savedInputs = JSON.parse(localStorage.getItem('comment-inputs') || '{}');
-    setCommentInputs(savedInputs);
-    
-    const savedComments = JSON.parse(localStorage.getItem('approval-comments') || '{}');
-    setComments(savedComments);
-    
-    const savedSharedComments = JSON.parse(localStorage.getItem('shared-comments') || '{}');
-    // Initialize with demo shared comment for Research Methodology Guidelines if not already present
-    if (!savedSharedComments['research-methodology']) {
-      savedSharedComments['research-methodology'] = [
-        {
-          comment: 'Insufficient literature review and theoretical framework. References need to be updated to the latest 3 years.',
-          sharedBy: 'Dr. Maria Garcia (HOD)',
-          sharedFor: 'all',  // Demo comment visible to all
-          timestamp: new Date().toISOString()
-        }
-      ];
-      localStorage.setItem('shared-comments', JSON.stringify(savedSharedComments));
-    }
-    setSharedComments(savedSharedComments);
+    // Initialize comments state - no localStorage
+    setCommentInputs({});
+    setComments({});
+    setSharedComments({});
     
     // Listen for document management approval cards
     const handleDocumentApprovalCreated = (event: any) => {
@@ -142,37 +120,32 @@ const Approvals = () => {
           }
         });
       } else {
-        // Fallback: reload from localStorage if no event detail
-        console.log('🔄 [Approvals] No event detail, reloading from localStorage');
-        const stored = JSON.parse(localStorage.getItem('pending-approvals') || '[]');
-        console.log('📥 [Approvals] Loaded', stored.length, 'cards from localStorage');
-        setPendingApprovals(stored);
+        // No event detail - Supabase subscription will handle updates
+        console.log('🔄 [Approvals] No event detail, Supabase subscription will sync');
       }
     };
     
     // Listen for shared comment updates
     const handleSharedCommentUpdate = (event: any) => {
       console.log('🔄 Shared comment update received:', event.detail);
-      // Reload shared comments from localStorage to get latest updates
-      const updatedSharedComments = JSON.parse(localStorage.getItem('shared-comments') || '{}');
+      // Shared comments updated via event - update state directly
+      const updatedSharedComments = event.detail?.sharedComments || sharedComments;
       setSharedComments(updatedSharedComments);
     };
     
     // 🆕 Listen for approval card updates (bypass/rejection handling)
     const handleApprovalCardUpdate = (event: any) => {
       console.log('🔄 Approval card update received:', event.detail);
-      // Reload pending approvals from localStorage to see updated workflow state
-      const stored = JSON.parse(localStorage.getItem('pending-approvals') || '[]');
-      console.log('📥 [Approvals] Reloaded', stored.length, 'cards after update event');
-      setPendingApprovals(stored);
+      // Approvals updated via Supabase subscription - no localStorage reload needed
+      console.log('📥 [Approvals] Card update event received, Supabase will sync');
       
       // Show notification if user is now the current recipient
       if (event.detail?.action === 'bypassed' && user) {
         const updatedCard = stored.find((card: any) => card.id === event.detail.docId);
         if (updatedCard && isUserInRecipients(updatedCard)) {
           // Check if it's now user's turn
-          const trackingCards = JSON.parse(localStorage.getItem('submitted-documents') || '[]');
-          const trackingCard = trackingCards.find((tc: any) => tc.id === updatedCard.trackingCardId || tc.id === updatedCard.id);
+          // Get tracking card from the event or approval card workflow directly
+          const trackingCard = updatedCard;
           
           if (trackingCard?.workflow?.steps) {
             const currentUserRole = user?.role?.toLowerCase() || '';
@@ -235,25 +208,16 @@ const Approvals = () => {
         message: comment
       };
       
-      // Save to localStorage for Track Documents
-      const existingComments = JSON.parse(localStorage.getItem('document-comments') || '{}');
-      existingComments[cardId] = [...(existingComments[cardId] || []), newComment];
-      localStorage.setItem('document-comments', JSON.stringify(existingComments));
-      
-      // Save to approval-comments with author info (now consistent with document-comments)
+      // Update state (TODO: persist to Supabase)
       const newComments = {
         ...comments,
         [cardId]: [...(comments[cardId] || []), newComment]
       };
       setComments(newComments);
       
-      // Save comments to localStorage for persistence
-      localStorage.setItem('approval-comments', JSON.stringify(newComments));
-      
       // Clear input field after submission
       const clearedInputs = { ...commentInputs, [cardId]: '' };
       setCommentInputs(clearedInputs);
-      localStorage.setItem('comment-inputs', JSON.stringify(clearedInputs));
     }
   };
 
@@ -278,12 +242,10 @@ const Approvals = () => {
         [cardId]: [...(sharedComments[cardId] || []), sharedComment]
       };
       setSharedComments(newSharedComments);
-      localStorage.setItem('shared-comments', JSON.stringify(newSharedComments));
       
-      // Clear input field after sharing
+      // Clear input field after sharing (no localStorage)
       const clearedInputs = { ...commentInputs, [cardId]: '' };
       setCommentInputs(clearedInputs);
-      localStorage.setItem('comment-inputs', JSON.stringify(clearedInputs));
       
       toast({
         title: "Comment Shared",
@@ -293,22 +255,12 @@ const Approvals = () => {
   };
 
   const handleUndoComment = (cardId: string, index: number) => {
-    // Remove from comments state
+    // Remove from comments state (no localStorage)
     const newComments = {
       ...comments,
       [cardId]: comments[cardId]?.filter((_, i) => i !== index) || []
     };
     setComments(newComments);
-    
-    // Save updated comments to localStorage
-    localStorage.setItem('approval-comments', JSON.stringify(newComments));
-    
-    // Remove from localStorage comments for Track Documents
-    const existingComments = JSON.parse(localStorage.getItem('document-comments') || '{}');
-    if (existingComments[cardId]) {
-      existingComments[cardId] = existingComments[cardId].filter((_: any, i: number) => i !== index);
-      localStorage.setItem('document-comments', JSON.stringify(existingComments));
-    }
     
     // Trigger real-time update for Track Documents
     window.dispatchEvent(new CustomEvent('approval-comments-changed'));
@@ -316,12 +268,12 @@ const Approvals = () => {
 
   const handleUndoSharedComment = (cardId: string, index: number) => {
     const removedComment = sharedComments[cardId]?.[index];
+    // Update state (no localStorage)
     const newSharedComments = {
       ...sharedComments,
       [cardId]: sharedComments[cardId]?.filter((_, i) => i !== index) || []
     };
     setSharedComments(newSharedComments);
-    localStorage.setItem('shared-comments', JSON.stringify(newSharedComments));
     
     // Trigger real-time update for next recipient's approval card
     if (removedComment) {
@@ -334,9 +286,9 @@ const Approvals = () => {
   const handleEditSharedComment = (cardId: string, index: number) => {
     const sharedComment = sharedComments[cardId]?.[index];
     if (sharedComment) {
+      // Update state (no localStorage)
       const newInputs = { ...commentInputs, [cardId]: sharedComment.comment };
       setCommentInputs(newInputs);
-      localStorage.setItem('comment-inputs', JSON.stringify(newInputs));
       handleUndoSharedComment(cardId, index);
       
       // Trigger real-time update for next recipient's approval card
@@ -349,10 +301,9 @@ const Approvals = () => {
   const handleEditComment = (cardId: string, index: number) => {
     const commentObj = comments[cardId]?.[index];
     if (commentObj) {
-      // Load the comment message back into the input field
+      // Load the comment message back into the input field (no localStorage)
       const newInputs = { ...commentInputs, [cardId]: commentObj.message };
       setCommentInputs(newInputs);
-      localStorage.setItem('comment-inputs', JSON.stringify(newInputs));
       handleUndoComment(cardId, index);
       
       // Trigger real-time update for Track Documents
@@ -736,12 +687,22 @@ const Approvals = () => {
   const [pendingApprovals, setPendingApprovals] = useState<any[]>([]);
   const [realTimePendingApprovals, setRealTimePendingApprovals] = useState<any[]>([]);
   
-  // Use real-time approval cards
+  // Use Supabase approval cards directly - NO localStorage merge
   useEffect(() => {
-    setRealTimePendingApprovals(approvalCards);
+    // Only update if there's actual change to prevent unnecessary re-renders
+    setRealTimePendingApprovals(prev => {
+      const prevIds = new Set(prev.map((c: any) => c.id));
+      const newIds = new Set(approvalCards.map((c: any) => c.id));
+      
+      if (prevIds.size !== newIds.size || ![...prevIds].every(id => newIds.has(id))) {
+        console.log('📄 [Approvals] Updating with Supabase cards:', approvalCards.length);
+        return approvalCards;
+      }
+      return prev;
+    });
   }, [approvalCards]);
   
-  // Load pending approvals and subscribe to real-time updates (fallback)
+  // Load pending approvals from Supabase only
   useEffect(() => {
     let subscription: any = null;
     
@@ -749,18 +710,15 @@ const Approvals = () => {
       try {
         const { supabaseWorkflowService } = await import('@/services/SupabaseWorkflowService');
         const cards = await supabaseWorkflowService.getApprovalCards(user?.id);
-        const stored = JSON.parse(localStorage.getItem('pending-approvals') || '[]');
-        const combined = [...cards, ...stored];
-        setPendingApprovals(combined);
+        setPendingApprovals(cards);
         if (approvalCards.length === 0) {
-          setRealTimePendingApprovals(combined);
+          setRealTimePendingApprovals(cards);
         }
       } catch (error) {
-        console.error('Failed to load approval cards:', error);
-        const stored = JSON.parse(localStorage.getItem('pending-approvals') || '[]');
-        setPendingApprovals(stored);
+        console.error('Failed to load approval cards from Supabase:', error);
+        setPendingApprovals([]);
         if (approvalCards.length === 0) {
-          setRealTimePendingApprovals(stored);
+          setRealTimePendingApprovals([]);
         }
       }
     };
@@ -817,8 +775,8 @@ const Approvals = () => {
       console.log(`   Source: ${doc.source}, Routing: ${doc.routingType}`);
       console.log(`   Is Parallel: ${doc.isParallel}`);
       
-      // Update document in Track Documents with signature
-      const submittedDocs = JSON.parse(localStorage.getItem('submitted-documents') || '[]');
+      // Supabase hook handles document updates - no localStorage needed
+      // The approveDocument function from useSupabaseRealTimeDocuments handles all persistence
       const updatedDocs = submittedDocs.map((trackDoc: any) => {
         // Match by ID or trackingCardId
         const isMatch = trackDoc.id === docId || trackDoc.id === doc.trackingCardId;
@@ -974,7 +932,8 @@ const Approvals = () => {
         return trackDoc;
       });
       
-      localStorage.setItem('submitted-documents', JSON.stringify(updatedDocs));
+      // Update via events (Supabase handles persistence)
+      window.dispatchEvent(new CustomEvent('submitted-documents-updated', { detail: { documents: updatedDocs } }));
       
       // Handle post-approval notifications
       const updatedDoc = updatedDocs.find((d: any) => d.id === docId || d.id === doc.trackingCardId);
@@ -1044,34 +1003,22 @@ const Approvals = () => {
         comment: comments[docId]?.join(' ') || 'Document approved successfully.'
       };
       
-      // Add to approval history state
+      // Add to approval history state (in-memory, Supabase handles persistence)
       setApprovalHistory(prev => {
         const updated = [approvedDoc, ...prev];
-        // Save to localStorage for persistence
-        try {
-          localStorage.setItem('approval-history-new', JSON.stringify(updated));
-          console.log('✅ [Approval History] Saved approved document to localStorage');
-        } catch (error) {
-          console.error('❌ [Approval History] Error saving to localStorage:', error);
-        }
         return updated;
       });
       
-      // Handle card removal based on routing type
+      // Handle card removal - Supabase handles persistence via hooks
       const isApprovalChainBypass = doc.source === 'approval-chain-bypass';
       const routingType = doc.routingType;
       
-      const pendingApprovalsData = JSON.parse(localStorage.getItem('pending-approvals') || '[]');
+      // Check if workflow is complete for this card
+      const isWorkflowComplete = doc.status === 'approved';
       
-      // 🆕 Check if workflow is complete for this card
-      const workflowDoc = updatedDocs.find((d: any) => d.id === docId || d.id === doc.trackingCardId);
-      const isWorkflowComplete = workflowDoc?.status === 'approved';
-      
-      // 🆕 For Approval Chain Bypass routing types, keep card for next recipients unless workflow is complete
+      // For Approval Chain Bypass routing types, keep card for next recipients unless workflow is complete
       if (isApprovalChainBypass && (routingType === 'sequential' || routingType === 'reverse') && !isWorkflowComplete) {
         console.log(`  🔄 Approval Chain Bypass ${routingType.toUpperCase()}: Card continues for next recipient`);
-        // Keep card in localStorage for next recipients
-        localStorage.setItem('pending-approvals', JSON.stringify(pendingApprovalsData));
         
         // Broadcast update event for next recipient to see the card
         window.dispatchEvent(new CustomEvent('approval-card-updated', {
@@ -1086,8 +1033,6 @@ const Approvals = () => {
         setPendingApprovals(prev => prev.filter(d => d.id !== docId));
       } else if (isApprovalChainBypass && (routingType === 'parallel' || routingType === 'bidirectional') && !isWorkflowComplete) {
         console.log(`  ⚡ Approval Chain Bypass ${routingType.toUpperCase()}: Card stays for all recipients`);
-        // Keep card in localStorage for all recipients
-        localStorage.setItem('pending-approvals', JSON.stringify(pendingApprovalsData));
         
         // Broadcast update event
         window.dispatchEvent(new CustomEvent('approval-card-updated', {
@@ -1103,10 +1048,6 @@ const Approvals = () => {
       } else {
         // Workflow complete or non-bypass cards: Remove for everyone
         console.log('  🗑️ Removing card for ALL recipients (workflow complete or non-bypass)');
-        const updatedPendingApprovals = pendingApprovalsData.filter((approval: any) => 
-          approval.id !== docId && approval.trackingCardId !== docId
-        );
-        localStorage.setItem('pending-approvals', JSON.stringify(updatedPendingApprovals));
         setPendingApprovals(prev => prev.filter(d => d.id !== docId));
       }
       
@@ -1185,8 +1126,8 @@ const Approvals = () => {
       console.log(`   Source: ${doc.source}, Routing: ${doc.routingType}`);
       console.log(`   Is Parallel: ${doc.isParallel}, Has Bypass: ${doc.hasBypass}`);
       
-      // Update document in Track Documents with rejection status
-      const submittedDocs = JSON.parse(localStorage.getItem('submitted-documents') || '[]');
+      // Update document in Track Documents with rejection status (using Supabase tracking cards)
+      const submittedDocs = trackDocuments || [];
       const updatedDocs = submittedDocs.map((trackDoc: any) => {
         // Match by ID or trackingCardId
         const isMatch = trackDoc.id === docId || trackDoc.id === doc.trackingCardId;
@@ -1429,7 +1370,8 @@ const Approvals = () => {
         return trackDoc;
       });
       
-      localStorage.setItem('submitted-documents', JSON.stringify(updatedDocs));
+      // Broadcast update via events (Supabase handles persistence)
+      window.dispatchEvent(new CustomEvent('submitted-documents-updated', { detail: { documents: updatedDocs } }));
       
       // Handle card removal based on mode
       const isParallel = doc.isParallel;
@@ -1437,14 +1379,12 @@ const Approvals = () => {
       const routingType = doc.routingType;
       const isApprovalChainBypass = doc.source === 'approval-chain-bypass';
       
-      const pendingApprovalsData = JSON.parse(localStorage.getItem('pending-approvals') || '[]');
+      // Use current pending approvals state (Supabase-backed)
       let updatedPendingApprovals;
       
       // 🆕 ALL Approval Chain with Bypass routing types continue workflow
       if (isApprovalChainBypass && (routingType === 'sequential' || routingType === 'parallel' || routingType === 'reverse' || routingType === 'bidirectional')) {
         console.log(`  🔄 Approval Chain Bypass ${routingType.toUpperCase()}: Card continues for others`);
-        updatedPendingApprovals = pendingApprovalsData; // Keep all cards in storage
-        localStorage.setItem('pending-approvals', JSON.stringify(updatedPendingApprovals)); // 🆕 Save to localStorage
         
         // Broadcast update event for other users to refresh
         window.dispatchEvent(new CustomEvent('approval-card-updated', {
@@ -1460,16 +1400,11 @@ const Approvals = () => {
       } else if (isParallel && hasBypass) {
         // BYPASS MODE (Emergency Management): Remove only for current user (card stays for others)
         console.log('  🔄 Bypass mode: Removing card only for current user');
-        updatedPendingApprovals = pendingApprovalsData; // Keep all cards in storage
         // Remove from local state only
         setPendingApprovals(prev => prev.filter(d => d.id !== docId));
       } else {
         // NO BYPASS: Remove for ALL users
         console.log('  🗑️ Removing card for ALL recipients');
-        updatedPendingApprovals = pendingApprovalsData.filter((approval: any) => 
-          approval.id !== docId && approval.trackingCardId !== docId
-        );
-        localStorage.setItem('pending-approvals', JSON.stringify(updatedPendingApprovals));
         setPendingApprovals(prev => prev.filter(d => d.id !== docId));
         
         // Broadcast rejection event
@@ -1479,12 +1414,6 @@ const Approvals = () => {
             rejectedBy: currentUserName,
             rejectedDate: currentDate
           }
-        }));
-        
-        // Force storage event
-        window.dispatchEvent(new StorageEvent('storage', {
-          key: 'pending-approvals',
-          newValue: JSON.stringify(updatedPendingApprovals)
         }));
       }
       
@@ -1500,16 +1429,11 @@ const Approvals = () => {
         comment: userComments.join(' ')
       };
       
-      // Add to approval history state
+      // Add to approval history state (Supabase handles persistence)
       setApprovalHistory(prev => {
         const updated = [rejectedDoc, ...prev];
-        // Save to localStorage for persistence
-        try {
-          localStorage.setItem('approval-history-new', JSON.stringify(updated));
-          console.log('✅ [Approval History] Saved rejected document to localStorage');
-        } catch (error) {
-          console.error('❌ [Approval History] Error saving to localStorage:', error);
-        }
+        // Broadcast update event
+        window.dispatchEvent(new CustomEvent('approval-history-updated', { detail: { history: updated } }));
         return updated;
       });
       
@@ -1864,44 +1788,9 @@ const Approvals = () => {
   };
 
   useEffect(() => {
-    const loadPendingApprovals = () => {
-      const stored = JSON.parse(localStorage.getItem('pending-approvals') || '[]');
-      console.log('📥 Loading pending approvals from localStorage:', stored.length, 'cards');
-      setPendingApprovals(stored);
-    };
-    
-    const loadApprovalHistory = () => {
-      const stored = JSON.parse(localStorage.getItem('approval-history-new') || '[]');
-      setApprovalHistory(stored);
-    };
-    
-    // Save approval data to localStorage for search
-    const saveApprovalData = () => {
-      const pendingData = [
-        { id: 'faculty-meeting', title: 'Faculty Meeting Minutes – Q4 2024', description: 'Add a risk-mitigation section to highlight potential delays or issues.' },
-        { id: 'budget-request', title: 'Budget Request – Lab Equipment', description: 'Consider revising the scope to focus on priority items within this quarter\'s budget.' },
-        { id: 'student-event', title: 'Student Event Proposal – Tech Fest 2024', description: 'Annual technology festival proposal including budget allocation, venue requirements, and guest speaker arrangements.' },
-        { id: 'research-methodology', title: 'Research Methodology Guidelines – Academic Review', description: 'Comprehensive guidelines for research methodology standards and academic review processes.' }
-      ];
-      localStorage.setItem('pendingApprovals', JSON.stringify(pendingData));
-      
-      const historyData = recentApprovals.map(doc => ({
-        id: doc.id,
-        title: doc.title,
-        description: doc.description,
-        status: doc.status
-      }));
-      localStorage.setItem('approvalHistory', JSON.stringify(historyData));
-    };
-    
-    loadPendingApprovals();
-    loadApprovalHistory();
-    saveApprovalData();
-    
-    const handleStorageChange = () => {
-      console.log('🔄 Storage changed, reloading approvals');
-      loadPendingApprovals();
-    };
+    // Data is loaded from Supabase via useRealTimeDocuments hook
+    // No localStorage loading needed - Supabase real-time handles updates
+    console.log('📥 Approval data loaded from Supabase');
     
     // Listen for document removal from Track Documents
     const handleDocumentRemoval = (event: any) => {
@@ -1944,13 +1833,11 @@ const Approvals = () => {
       });
     };
     
-    window.addEventListener('storage', handleStorageChange);
     window.addEventListener('document-removed', handleDocumentRemoval);
     window.addEventListener('approval-card-created', handleApprovalCardCreated);
     window.addEventListener('document-rejected', handleDocumentRejected);
     
     return () => {
-      window.removeEventListener('storage', handleStorageChange);
       window.removeEventListener('document-removed', handleDocumentRemoval);
       window.removeEventListener('approval-card-created', handleApprovalCardCreated);
       window.removeEventListener('document-rejected', handleDocumentRejected);
@@ -1962,10 +1849,7 @@ const Approvals = () => {
     const handleDocumentSigned = (event: any) => {
       console.log('🖊️ [Approval Center] Document signed event received:', event.detail);
       
-      // Reload pending approvals to show updated signed files
-      const stored = JSON.parse(localStorage.getItem('pending-approvals') || '[]');
-      setPendingApprovals(stored);
-      
+      // Reload pending approvals (Supabase subscription handles data updates)
       if (event.detail?.documentId) {
         toast({
           title: "Document Signed",
@@ -1982,43 +1866,12 @@ const Approvals = () => {
     };
   }, [toast]);
   
-  // Save approval history to localStorage whenever it changes (with quota management)
+  // Approval history is synced to Supabase - no localStorage needed
   useEffect(() => {
-    try {
-      // Keep only the last 50 approval history items to prevent quota issues
-      const limitedHistory = approvalHistory.slice(0, 50);
-      
-      // Remove large file data from history to save space
-      const compactHistory = limitedHistory.map(item => ({
-        ...item,
-        files: undefined, // Don't store full files in history
-        description: item.description?.substring(0, 200) // Limit description length
-      }));
-      
-      localStorage.setItem('approval-history-new', JSON.stringify(compactHistory));
-      console.log('💾 Saved approval history:', compactHistory.length, 'items');
-    } catch (quotaError) {
-      console.error('⚠️ LocalStorage quota exceeded for approval history:', quotaError);
-      // Clear old history and try again
-      try {
-        const recentHistory = approvalHistory.slice(0, 20).map(item => ({
-          id: item.id,
-          title: item.title,
-          status: item.status,
-          approvedBy: item.approvedBy,
-          approvedDate: item.approvedDate
-        }));
-        localStorage.setItem('approval-history-new', JSON.stringify(recentHistory));
-        toast({
-          title: "Storage Optimized",
-          description: "Cleared old approval history to free up space",
-          duration: 3000,
-        });
-      } catch (e) {
-        console.error('Failed to save even compact history:', e);
-      }
-    }
-  }, [approvalHistory, toast]);
+    // Broadcast update for any listeners
+    console.log('📊 Approval history updated:', approvalHistory.length, 'items');
+    window.dispatchEvent(new CustomEvent('approval-history-updated', { detail: { history: approvalHistory } }));
+  }, [approvalHistory]);
   
   // Handle Documenso completion
   const handleDocumensoComplete = (docId: string) => {
@@ -2189,9 +2042,8 @@ const Approvals = () => {
                     if (doc.source === 'approval-chain-bypass') {
                       console.log(`  🔀 Approval Chain Bypass - Routing: ${doc.routingType}`);
                       
-                      // Get tracking card for workflow state
-                      const trackingCards = JSON.parse(localStorage.getItem('submitted-documents') || '[]');
-                      const trackingCard = trackingCards.find((tc: any) => tc.id === doc.trackingCardId || tc.id === doc.id);
+                      // Get tracking card for workflow state from Supabase data
+                      const trackingCard = trackDocuments?.find((tc: any) => tc.id === doc.trackingCardId || tc.id === doc.id);
                       
                       if (trackingCard?.workflow?.steps) {
                         const userStep = findUserStepInWorkflow(
@@ -2213,8 +2065,7 @@ const Approvals = () => {
                     
                     // For cards with tracking (sequential workflow)
                     if (doc.trackingCardId) {
-                      const trackingCards = JSON.parse(localStorage.getItem('submitted-documents') || '[]');
-                      const trackingCard = trackingCards.find((tc: any) => tc.id === doc.trackingCardId);
+                      const trackingCard = trackDocuments?.find((tc: any) => tc.id === doc.trackingCardId);
                       
                       if (trackingCard?.workflow?.steps) {
                         // If tracking card is parallel, show to all
@@ -2259,9 +2110,8 @@ const Approvals = () => {
                                     </Badge>
                                   )}
                                   {(() => {
-                                    // Check if this document has escalation
-                                    const trackingCards = JSON.parse(localStorage.getItem('submitted-documents') || '[]');
-                                    const trackingCard = trackingCards.find((tc: any) => 
+                                    // Check if this document has escalation from Supabase data
+                                    const trackingCard = trackDocuments?.find((tc: any) => 
                                       tc.id === doc.id || tc.id === doc.trackingCardId
                                     );
                                     const escalationLevel = trackingCard?.workflow?.escalationLevel || 0;
@@ -2319,8 +2169,7 @@ const Approvals = () => {
 
                             {/* Action Required Indicator */}
                             {(() => {
-                              const trackingCards = JSON.parse(localStorage.getItem('submitted-documents') || '[]');
-                              const trackingCard = trackingCards.find((tc: any) => 
+                              const trackingCard = trackDocuments?.find((tc: any) => 
                                 tc.id === doc.id || tc.id === doc.trackingCardId
                               );
                               const escalationLevel = trackingCard?.workflow?.escalationLevel || 0;
@@ -2461,7 +2310,6 @@ const Approvals = () => {
                                   onChange={(e) => {
                                   const newInputs = { ...commentInputs, [doc.id]: e.target.value };
                                   setCommentInputs(newInputs);
-                                  localStorage.setItem('comment-inputs', JSON.stringify(newInputs));
                                 }}
                                   onInput={(e) => {
                                     const target = e.target as HTMLTextAreaElement;
@@ -2698,7 +2546,6 @@ const Approvals = () => {
                                 onChange={(e) => {
                                   const newInputs = { ...commentInputs, 'faculty-meeting': e.target.value };
                                   setCommentInputs(newInputs);
-                                  localStorage.setItem('comment-inputs', JSON.stringify(newInputs));
                                 }}
                                 onInput={(e) => {
                                   const target = e.target as HTMLTextAreaElement;
@@ -2952,7 +2799,6 @@ const Approvals = () => {
                                 onChange={(e) => {
                                   const newInputs = { ...commentInputs, 'budget-request': e.target.value };
                                   setCommentInputs(newInputs);
-                                  localStorage.setItem('comment-inputs', JSON.stringify(newInputs));
                                 }}
                                 onInput={(e) => {
                                   const target = e.target as HTMLTextAreaElement;
@@ -3157,7 +3003,6 @@ const Approvals = () => {
                               onChange={(e) => {
                                 const newInputs = { ...commentInputs, 'student-event': e.target.value };
                                 setCommentInputs(newInputs);
-                                localStorage.setItem('comment-inputs', JSON.stringify(newInputs));
                               }}
                               onInput={(e) => {
                                 const target = e.target as HTMLTextAreaElement;
@@ -3407,7 +3252,6 @@ const Approvals = () => {
                                 onChange={(e) => {
                                   const newInputs = { ...commentInputs, 'research-methodology': e.target.value };
                                   setCommentInputs(newInputs);
-                                  localStorage.setItem('comment-inputs', JSON.stringify(newInputs));
                                 }}
                                 onInput={(e) => {
                                   const target = e.target as HTMLTextAreaElement;

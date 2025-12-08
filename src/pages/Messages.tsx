@@ -64,9 +64,7 @@ const Messages = () => {
   });
 
   const [channelMessageCounts, setChannelMessageCounts] = useState({
-    'Administrative Council': 9,
-    'Faculty Board': 5,
-    'General': 12
+    'Faculty Board': 5
   });
   
   // Update stats when Supabase data changes
@@ -136,8 +134,8 @@ const Messages = () => {
 
   const loadLiveMeetRequests = useCallback(() => {
     try {
-      // Load all LiveMeet+ requests from localStorage
-      const allRequests = JSON.parse(localStorage.getItem('livemeet-requests') || '[]');
+      // LiveMeet requests now loaded from Supabase - in-memory state only
+      // TODO: Implement Supabase storage for live meeting requests
       
       if (!user) {
         // Batch state updates using functional form
@@ -145,6 +143,9 @@ const Messages = () => {
         setLiveMeetRequests([]);
         return;
       }
+      
+      // For now, use empty array - Supabase integration pending
+      const allRequests: any[] = [];
       
       // Get current user information
       const currentUserId = user.id;
@@ -198,19 +199,7 @@ const Messages = () => {
   useEffect(() => {
     if (!user) return;
 
-    try {
-      // Immediate data setup for instant loading
-      Object.entries(messagesData).forEach(([key, data]) => {
-        try {
-          localStorage.setItem(key, JSON.stringify(data));
-        } catch (error) {
-          console.error(`[Messages] Error saving ${key} to localStorage:`, error);
-        }
-      });
-    } catch (error) {
-      console.error('[Messages] Error initializing localStorage:', error);
-    }
-    
+    // No localStorage initialization needed - Supabase handles data
     loadLiveMeetRequests();
     setIsInitialized(true);
 

@@ -98,26 +98,8 @@ export const NotificationProvider: React.FC<NotificationProviderProps> = ({ chil
     }
   }, []);
 
-  // Load notifications from localStorage
-  useEffect(() => {
-    const saved = localStorage.getItem('iaoms-notifications');
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved);
-        setNotifications(parsed.map((n: any) => ({
-          ...n,
-          timestamp: new Date(n.timestamp)
-        })));
-      } catch (error) {
-        console.error('Failed to load notifications:', error);
-      }
-    }
-  }, []);
-
-  // Save notifications to localStorage
-  useEffect(() => {
-    localStorage.setItem('iaoms-notifications', JSON.stringify(notifications));
-  }, [notifications]);
+  // Notifications are handled by Supabase real-time subscriptions
+  // No localStorage loading/saving needed - state is managed in React
 
   return (
     <NotificationContext.Provider value={{

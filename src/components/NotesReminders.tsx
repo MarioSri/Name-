@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -37,6 +37,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
+import { supabase } from "@/lib/supabase";
 
 interface Note {
   id: number;
@@ -164,72 +165,115 @@ export function NotesReminders({ userRole, isMessagesPage = false }: NotesRemind
   const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
   const [isDragging, setIsDragging] = useState(false);
   const [isLocked, setIsLocked] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
   const containerRef = useRef<HTMLDivElement>(null);
-  const [notes, setNotes] = useState<Note[]>([
-    {
-      id: 1,
-      title: "Faculty Meeting Follow-up",
-      content: "Review new curriculum proposals and schedule next review meeting",
-      color: "bg-yellow-200",
-      position: { x: 50, y: 100 },
-      createdAt: "2024-01-15",
-      category: "meetings",
-      pinned: true
-    },
-    {
-      id: 2,
-      title: "Budget Review",
-      content: "Check Q1 budget allocations and submit variance report",
-      color: "bg-blue-200",
-      position: { x: 300, y: 150 },
-      createdAt: "2024-01-14",
-      category: "finance",
-      pinned: false
-    },
-    {
-      id: 3,
-      title: "Student Evaluation",
-      content: "Complete mid-semester evaluation forms for all courses",
-      color: "bg-green-200",
-      position: { x: 550, y: 120 },
-      createdAt: "2024-01-13",
-      category: "academic",
-      pinned: false
-    }
-  ]);
+  const [notes, setNotes] = useState<Note[]>([]);
+  const [reminders, setReminders] = useState<Reminder[]>([]);
+  
+  // Get current user
+  const getCurrentUserId = useCallback(() => {
+    const currentUserStr = localStorage.getItem('currentUser');
+    const currentUser = currentUserStr ? JSON.parse(currentUserStr) : null;
+    return currentUser?.id || 'default_user';
+  }, []);
 
-  const [reminders, setReminders] = useState<Reminder[]>([
-    {
-      id: 1,
-      title: "Submit Monthly Report",
-      description: "Department performance and activity report for January",
-      dueDate: "2024-01-25",
-      dueTime: "17:00",
-      priority: "high",
-      completed: false,
-      category: "reports"
-    },
-    {
-      id: 2,
-      title: "Faculty Appraisal Meeting",
-      description: "Annual performance review with Dr. Smith",
-      dueDate: "2024-01-22",
-      dueTime: "14:00",
-      priority: "medium",
-      completed: false,
-      category: "meetings"
-    },
-    {
-      id: 3,
-      title: "Research Proposal Deadline",
-      description: "Submit proposal for new research project funding",
-      dueDate: "2024-01-30",
-      dueTime: "23:59",
-      priority: "high",
-      completed: false,
-      category: "research"
+  const getCurrentUserName = useCallback(() => {
+    const currentUserStr = localStorage.getItem('currentUser');
+    const currentUser = currentUserStr ? JSON.parse(currentUserStr) : null;
+    return currentUser?.name || 'User';
+  }, []);
+
+  // Load notes and reminders from Supabase
+  const loadData = useCallback(async () => {
+    const userId = getCurrentUserId();
+    setIsLoading(true);
+    
+    try {
+      // Load notes - Note: 'notes' table doesn't exist in schema, skip
+      // Using localStorage fallback for notes
+      console.warn('⚠️ Notes table does not exist in Supabase, using localStorage fallback');
+      
+      // Get user's UUID from recipients table first (user_id column is UUID type)
+      let userUuid = userId;
+      if (!userId.match(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i)) {
+        const { data: recipient } = await supabase
+          .from('recipients')
+          .select('id')
+          .eq('user_id', userId)
+          .single();
+        if (recipient) {
+          userUuid = recipient.id;
+        } else {
+          // No matching recipient, skip reminders query
+          console.warn('⚠️ No recipient found for user, skipping reminders load');
+          setIsLoading(false);
+          return;
+        }
+      }
+      
+      // Load reminders (use user_id and remind_at - correct column names)
+      const { data: remindersData, error: remindersError } = await supabase
+        .from('reminders')
+        .select('*')
+        .eq('user_id', userUuid)
+        .order('remind_at', { ascending: true });
+      
+      if (!remindersError && remindersData) {
+        const formattedReminders: Reminder[] = remindersData.map((r: any) => {
+          const reminderTime = new Date(r.remind_at);
+          return {
+            id: parseInt(r.reminder_id.replace('reminder_', '')) || Date.now(),
+            title: r.title,
+            description: r.description || '',
+            dueDate: reminderTime.toISOString().split('T')[0],
+            dueTime: reminderTime.toTimeString().slice(0, 5),
+            priority: (r.priority || 'medium') as 'low' | 'medium' | 'high',
+            completed: r.status === 'dismissed' || r.status === 'sent',
+            category: r.category || 'general'
+          };
+        });
+        setReminders(formattedReminders);
+      }
+    } catch (error) {
+      console.error('Error loading notes/reminders:', error);
+    } finally {
+      setIsLoading(false);
     }
-  ]);
+  }, [getCurrentUserId]);
+
+  // Initial load and real-time subscription
+  useEffect(() => {
+    loadData();
+    
+    const userId = getCurrentUserId();
+    
+    // Subscribe to notes changes
+    const notesChannel = supabase
+      .channel(`notes:${userId}`)
+      .on('postgres_changes', {
+        event: '*',
+        schema: 'public',
+        table: 'notes',
+        filter: `owner_id=eq.${userId}`
+      }, () => loadData())
+      .subscribe();
+    
+    // Subscribe to reminders changes
+    const remindersChannel = supabase
+      .channel(`reminders:${userId}`)
+      .on('postgres_changes', {
+        event: '*',
+        schema: 'public',
+        table: 'reminders',
+        filter: `owner_id=eq.${userId}`
+      }, () => loadData())
+      .subscribe();
+    
+    return () => {
+      supabase.removeChannel(notesChannel);
+      supabase.removeChannel(remindersChannel);
+    };
+  }, [loadData, getCurrentUserId]);
 
   const [newNote, setNewNote] = useState({
     title: "",
@@ -250,6 +294,8 @@ export function NotesReminders({ userRole, isMessagesPage = false }: NotesRemind
   const [editingNote, setEditingNote] = useState<number | null>(null);
   const [editNoteData, setEditNoteData] = useState({ title: "", content: "", color: "", category: "" });
   const [searchTerm, setSearchTerm] = useState("");
+  const [isNoteDialogOpen, setIsNoteDialogOpen] = useState(false);
+  const [isReminderDialogOpen, setIsReminderDialogOpen] = useState(false);
 
   const noteColors = [
     { name: "Yellow", class: "bg-yellow-200" },
@@ -264,25 +310,54 @@ export function NotesReminders({ userRole, isMessagesPage = false }: NotesRemind
     "general", "meetings", "finance", "academic", "research", "administrative"
   ];
 
-  const addNote = () => {
+  const addNote = async () => {
+    const noteId = Date.now();
+    const userId = getCurrentUserId();
+    const userName = getCurrentUserName();
+    const position = { x: Math.random() * 400, y: Math.random() * 300 + 100 };
+    
+    // Optimistic update
     const note: Note = {
-      id: Date.now(),
+      id: noteId,
       ...newNote,
-      position: { x: Math.random() * 400, y: Math.random() * 300 + 100 },
+      position,
       createdAt: new Date().toISOString().split('T')[0],
       pinned: false
     };
-    setNotes([...notes, note]);
+    setNotes(prev => [...prev, note]);
     setNewNote({ title: "", content: "", color: "bg-yellow-200", category: "general" });
+    setIsNoteDialogOpen(false);
+    
+    // Save to Supabase
+    try {
+      await supabase.from('notes').insert({
+        note_id: `note_${noteId}`,
+        owner_id: userId,
+        owner_name: userName,
+        title: newNote.title,
+        content: newNote.content,
+        color: newNote.color,
+        category: newNote.category,
+        is_pinned: false,
+        metadata: { position_x: position.x, position_y: position.y }
+      });
+    } catch (error) {
+      console.error('Error saving note:', error);
+    }
   };
 
-  const addReminder = () => {
+  const addReminder = async () => {
+    const reminderId = Date.now();
+    const userId = getCurrentUserId();
+    const userName = getCurrentUserName();
+    
+    // Optimistic update
     const reminder: Reminder = {
-      id: Date.now(),
+      id: reminderId,
       ...newReminder,
       completed: false
     };
-    setReminders([...reminders, reminder]);
+    setReminders(prev => [...prev, reminder]);
     setNewReminder({
       title: "",
       description: "",
@@ -291,16 +366,58 @@ export function NotesReminders({ userRole, isMessagesPage = false }: NotesRemind
       priority: "medium",
       category: "general"
     });
+    setIsReminderDialogOpen(false);
+    
+    // Save to Supabase
+    try {
+      const reminderTime = new Date(`${newReminder.dueDate}T${newReminder.dueTime}`);
+      await supabase.from('reminders').insert({
+        reminder_id: `reminder_${reminderId}`,
+        owner_id: userId,
+        owner_name: userName,
+        title: newReminder.title,
+        description: newReminder.description,
+        reminder_time: reminderTime.toISOString(),
+        priority: newReminder.priority,
+        category: newReminder.category,
+        is_completed: false
+      });
+    } catch (error) {
+      console.error('Error saving reminder:', error);
+    }
   };
 
-  const deleteNote = (id: number) => {
+  const deleteNote = async (id: number) => {
+    // Optimistic update
     setNotes(notes.filter(note => note.id !== id));
+    
+    // Delete from Supabase
+    try {
+      await supabase.from('notes').delete().eq('note_id', `note_${id}`);
+    } catch (error) {
+      console.error('Error deleting note:', error);
+      loadData(); // Reload on error
+    }
   };
 
-  const togglePin = (id: number) => {
-    setNotes(notes.map(note => 
-      note.id === id ? { ...note, pinned: !note.pinned } : note
+  const togglePin = async (id: number) => {
+    const note = notes.find(n => n.id === id);
+    if (!note) return;
+    
+    const newPinned = !note.pinned;
+    
+    // Optimistic update
+    setNotes(notes.map(n => 
+      n.id === id ? { ...n, pinned: newPinned } : n
     ));
+    
+    // Update in Supabase
+    try {
+      await supabase.from('notes').update({ is_pinned: newPinned }).eq('note_id', `note_${id}`);
+    } catch (error) {
+      console.error('Error updating note pin:', error);
+      loadData(); // Reload on error
+    }
   };
 
   const toggleLock = () => {
@@ -320,15 +437,31 @@ export function NotesReminders({ userRole, isMessagesPage = false }: NotesRemind
     }
   };
 
-  const saveEditNote = () => {
+  const saveEditNote = async () => {
     if (editingNote) {
+      // Optimistic update
       setNotes(notes.map(note => 
         note.id === editingNote 
           ? { ...note, ...editNoteData }
           : note
       ));
+      
+      const noteId = editingNote;
       setEditingNote(null);
       setEditNoteData({ title: "", content: "", color: "", category: "" });
+      
+      // Update in Supabase
+      try {
+        await supabase.from('notes').update({
+          title: editNoteData.title,
+          content: editNoteData.content,
+          color: editNoteData.color,
+          category: editNoteData.category
+        }).eq('note_id', `note_${noteId}`);
+      } catch (error) {
+        console.error('Error updating note:', error);
+        loadData(); // Reload on error
+      }
     }
   };
 
@@ -448,10 +581,24 @@ export function NotesReminders({ userRole, isMessagesPage = false }: NotesRemind
     }
   };
 
-  const toggleReminder = (id: number) => {
-    setReminders(reminders.map(reminder => 
-      reminder.id === id ? { ...reminder, completed: !reminder.completed } : reminder
+  const toggleReminder = async (id: number) => {
+    const reminder = reminders.find(r => r.id === id);
+    if (!reminder) return;
+    
+    const newCompleted = !reminder.completed;
+    
+    // Optimistic update
+    setReminders(reminders.map(r => 
+      r.id === id ? { ...r, completed: newCompleted } : r
     ));
+    
+    // Update in Supabase
+    try {
+      await supabase.from('reminders').update({ is_completed: newCompleted }).eq('reminder_id', `reminder_${id}`);
+    } catch (error) {
+      console.error('Error updating reminder:', error);
+      loadData(); // Reload on error
+    }
   };
 
   const getPriorityColor = (priority: string) => {
@@ -487,7 +634,7 @@ export function NotesReminders({ userRole, isMessagesPage = false }: NotesRemind
           <p className="text-muted-foreground">Organize your thoughts and stay on top of important tasks</p>
         </div>
         <div className="flex gap-2">
-          <Dialog>
+          <Dialog open={isReminderDialogOpen} onOpenChange={setIsReminderDialogOpen}>
             <DialogTrigger asChild>
               <Button variant="outline">
                 <Plus className="w-4 h-4 mr-2" />
@@ -563,9 +710,7 @@ export function NotesReminders({ userRole, isMessagesPage = false }: NotesRemind
                   </div>
                 </div>
                 <div className="flex justify-end gap-2 pt-4">
-                  <DialogTrigger asChild>
-                    <Button variant="outline">Cancel</Button>
-                  </DialogTrigger>
+                  <Button variant="outline" onClick={() => setIsReminderDialogOpen(false)}>Cancel</Button>
                   <Button onClick={addReminder} variant="gradient">
                     <Bell className="w-4 h-4 mr-2" />
                     Create Reminder
@@ -575,7 +720,7 @@ export function NotesReminders({ userRole, isMessagesPage = false }: NotesRemind
             </DialogContent>
           </Dialog>
           
-          <Dialog>
+          <Dialog open={isNoteDialogOpen} onOpenChange={setIsNoteDialogOpen}>
             <DialogTrigger asChild>
               <Button variant="gradient">
                 <Plus className="w-4 h-4 mr-2" />
@@ -636,9 +781,7 @@ export function NotesReminders({ userRole, isMessagesPage = false }: NotesRemind
                   </div>
                 </div>
                 <div className="flex justify-end gap-2 pt-4">
-                  <DialogTrigger asChild>
-                    <Button variant="outline">Cancel</Button>
-                  </DialogTrigger>
+                  <Button variant="outline" onClick={() => setIsNoteDialogOpen(false)}>Cancel</Button>
                   <Button onClick={addNote} variant="gradient">
                     <StickyNote className="w-4 h-4 mr-2" />
                     Create Note

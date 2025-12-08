@@ -148,11 +148,11 @@ export function useSupabaseRealTimeMeetings(): UseSupabaseRealTimeMeetingsResult
       setLoading(true);
       setError(null);
 
-      // Fetch meetings
+      // Fetch meetings (use start_time instead of meeting_date - correct column name)
       const { data: meetingsData, error: meetingsError } = await supabase
         .from('meetings')
         .select('*')
-        .order('meeting_date', { ascending: true });
+        .order('start_time', { ascending: true });
 
       if (meetingsError) {
         console.error('❌ Error fetching meetings:', meetingsError);

@@ -151,15 +151,21 @@ export interface Notification {
   id: string;
   notification_id: string;
   recipient_id: string;
-  recipient_user_id: string;
+  notification_type: string;
+  priority?: string;
   title: string;
   message: string;
-  type: string;
-  category: string;
   is_read: boolean;
+  read_at?: string;
+  is_archived?: boolean;
   action_url?: string;
   data?: Record<string, any>;
   created_at: string;
+  expires_at?: string;
+  // Legacy fields for compatibility
+  type?: string;
+  category?: string;
+  recipient_user_id?: string;
 }
 
 export interface Meeting {
@@ -329,113 +335,214 @@ class SupabaseStorageService {
     if (error) throw error;
     
     // Convert junction table objects to arrays for backward compatibility
+    // Note: document_recipients table has: recipient_id (UUID), recipient_type, approval_order, approval_status
     return (data || []).map(doc => ({
       ...doc,
       recipients: doc.doc_recipients?.map((r: any) => ({
-        recipient_name: r.recipient_name,
-        recipient_user_id: r.recipient_user_id,
-        order_index: r.order_index
+        recipient_id: r.recipient_id,
+        recipient_type: r.recipient_type,
+        order_index: r.approval_order,
+        status: r.approval_status
       })) || []
     }));
   }
 
   async getDocumentsBySubmitter(submitterId: string): Promise<Document[]> {
-    const { data, error } = await supabase
+    // Try to find by UUID first, then by user_id lookup
+    let query = supabase
       .from('documents')
       .select(`
         *,
         doc_recipients:document_recipients(*)
-      `)
-      .eq('submitter_id', submitterId)
-      .order('created_at', { ascending: false });
+      `);
+    
+    // If it looks like a UUID, query directly; otherwise lookup recipient first
+    if (submitterId.match(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i)) {
+      query = query.eq('created_by', submitterId);
+    } else {
+      // Look up the recipient UUID from user_id
+      const recipient = await this.getRecipientByUserId(submitterId);
+      if (recipient) {
+        query = query.eq('created_by', recipient.id);
+      } else {
+        // No matching recipient found, return empty array
+        return [];
+      }
+    }
+    
+    const { data, error } = await query.order('created_at', { ascending: false });
 
     if (error) throw error;
     
     // Convert junction table objects to arrays for backward compatibility
+    // Note: document_recipients table has: recipient_id (UUID), recipient_type, approval_order, approval_status
     return (data || []).map(doc => ({
       ...doc,
       recipients: doc.doc_recipients?.map((r: any) => ({
-        recipient_name: r.recipient_name,
-        recipient_user_id: r.recipient_user_id,
-        order_index: r.order_index
+        recipient_id: r.recipient_id,
+        recipient_type: r.recipient_type,
+        order_index: r.approval_order,
+        status: r.approval_status
       })) || []
     }));
   }
 
   async getDocumentByTrackingId(trackingId: string): Promise<Document | null> {
+    // Use document_id column (correct Supabase schema column name)
     const { data, error } = await supabase
       .from('documents')
       .select(`
         *,
         doc_recipients:document_recipients(*)
       `)
-      .eq('tracking_id', trackingId)
+      .eq('document_id', trackingId)
       .single();
 
     if (error && error.code !== 'PGRST116') throw error;
     if (!data) return null;
     
     // Convert junction table objects for backward compatibility
+    // Note: document_recipients table has: recipient_id (UUID), recipient_type, approval_order, approval_status
     return {
       ...data,
       recipients: data.doc_recipients?.map((r: any) => ({
-        recipient_name: r.recipient_name,
-        recipient_user_id: r.recipient_user_id,
-        order_index: r.order_index
+        recipient_id: r.recipient_id,
+        recipient_type: r.recipient_type,
+        order_index: r.approval_order,
+        status: r.approval_status
       })) || []
     };
   }
 
   async createDocument(doc: Partial<Document>, recipientIds: { id: string; userId: string; name: string }[]): Promise<Document> {
-    const trackingId = doc.tracking_id || `DOC-${Date.now()}`;
+    // Map document type to valid enum value
+    const docTypeMap: Record<string, string> = {
+      'Letter': 'letter',
+      'Circular': 'circular', 
+      'Report': 'report',
+      'Memo': 'memo',
+      'Notice': 'notice',
+      'Proposal': 'proposal',
+      'Request': 'request',
+      'Application': 'application',
+      'Certificate': 'certificate',
+      'Meeting Minutes': 'meeting_minutes',
+      'Policy': 'policy',
+      'Announcement': 'announcement',
+      'Document': 'letter', // Default
+    };
     
-    // Create document
+    // Map priority to valid enum value
+    const priorityMap: Record<string, string> = {
+      'low': 'low',
+      'normal': 'normal',
+      'medium': 'normal',
+      'high': 'high',
+      'urgent': 'urgent',
+      'emergency': 'emergency',
+    };
+    
+    // Map routing type to valid enum value
+    const routingMap: Record<string, string> = {
+      'sequential': 'sequential',
+      'parallel': 'parallel',
+      'reverse': 'reverse',
+      'bidirectional': 'bidirectional',
+      'hybrid': 'hybrid',
+    };
+
+    // Get submitter's recipient ID (UUID) from Supabase
+    // UUID format: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx (36 chars, 8-4-4-4-12 hex)
+    const isValidUuid = (str: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str);
+    
+    let createdByUuid = doc.submitter_id;
+    if (doc.submitter_id && !isValidUuid(doc.submitter_id)) {
+      // If it's not a UUID, try to look up the recipient by user_id
+      console.log('🔍 Looking up UUID for submitter:', doc.submitter_id);
+      const recipient = await this.getRecipientByUserId(doc.submitter_id);
+      if (recipient) {
+        createdByUuid = recipient.id;
+        console.log('✅ Found submitter UUID:', createdByUuid);
+      } else {
+        console.error('❌ Submitter not found in recipients table:', doc.submitter_id);
+        throw new Error(`Submitter ${doc.submitter_id} not found in recipients table. Cannot create document.`);
+      }
+    }
+
+    // Store extra fields in metadata since they don't exist in schema
+    const metadata = {
+      ...(doc.metadata || {}),
+      tracking_id: doc.tracking_id,
+      submitter_name: doc.submitter_name,
+      submitter_role: doc.submitter_role,
+      is_emergency: doc.is_emergency || false,
+      is_parallel: doc.is_parallel || false,
+      source: doc.source || 'document-management',
+      workflow: doc.workflow || {},
+    };
+    
+    console.log('📄 Creating document with mapped values:', {
+      title: doc.title,
+      document_type: docTypeMap[doc.type || 'Document'] || 'letter',
+      priority: priorityMap[doc.priority || 'normal'] || 'normal',
+      routing_type: routingMap[doc.routing_type || 'sequential'] || 'sequential',
+      created_by: createdByUuid,
+    });
+
+    // Create document using actual Supabase schema columns
     const { data: docData, error: docError } = await supabase
       .from('documents')
       .insert({
-        tracking_id: trackingId,
         title: doc.title,
         description: doc.description,
-        type: doc.type || 'Letter',
-        priority: doc.priority || 'normal',
+        document_type: docTypeMap[doc.type || 'Document'] || 'letter',
+        priority: priorityMap[doc.priority || 'normal'] || 'normal',
         status: 'pending',
-        submitter_id: doc.submitter_id,
-        submitter_name: doc.submitter_name,
-        submitter_role: doc.submitter_role,
-        routing_type: doc.routing_type || 'sequential',
-        is_emergency: doc.is_emergency || false,
-        is_parallel: doc.is_parallel || false,
-        source: doc.source || 'document-management',
+        created_by: createdByUuid,
+        routing_type: routingMap[doc.routing_type || 'sequential'] || 'sequential',
         file_url: doc.file_url,
         file_name: doc.file_name,
         file_size: doc.file_size,
-        metadata: doc.metadata || {},
-        workflow: doc.workflow || {},
+        metadata: metadata,
       })
       .select()
       .single();
 
-    if (docError) throw docError;
+    if (docError) {
+      console.error('❌ Error creating document:', docError);
+      throw docError;
+    }
 
-    // Add recipients
+    console.log('✅ Document created:', docData.id, 'document_id:', docData.document_id);
+
+    // Add recipients - use recipient_id (UUID) and proper column names
     if (recipientIds.length > 0) {
       const recipientRecords = recipientIds.map((r, index) => ({
         document_id: docData.id,
-        recipient_id: r.id,
-        recipient_user_id: r.userId,
-        recipient_name: r.name,
-        order_index: index,
-        status: 'pending',
+        recipient_id: r.id, // This should be UUID
+        recipient_type: 'approver',
+        approval_order: index,
+        approval_status: 'pending',
       }));
+
+      console.log('📋 Adding document recipients:', recipientRecords);
 
       const { error: recipientError } = await supabase
         .from('document_recipients')
         .insert(recipientRecords);
 
-      if (recipientError) throw recipientError;
+      if (recipientError) {
+        console.error('❌ Error adding document recipients:', recipientError);
+        // Don't throw - document was created, recipients failed
+        console.warn('Document created but recipients not added. You may need to verify recipient UUIDs exist in the recipients table.');
+      }
     }
 
-    return docData;
+    // Return with tracking_id for compatibility (stored in metadata or use document_id)
+    return {
+      ...docData,
+      tracking_id: doc.tracking_id || docData.document_id,
+    } as Document;
   }
 
   async updateDocumentStatus(trackingId: string, status: string): Promise<Document> {
@@ -464,31 +571,42 @@ class SupabaseStorageService {
     if (error) throw error;
     
     // Convert junction table objects to arrays for backward compatibility
+    // Note: approval_card_recipients table has: recipient_id (UUID), recipient_type, approval_order
     return (data || []).map(card => ({
       ...card,
       recipients: card.card_recipients?.map((r: any) => ({
-        recipient_name: r.recipient_name,
-        recipient_user_id: r.recipient_user_id,
-        order_index: r.order_index
+        recipient_id: r.recipient_id,
+        recipient_type: r.recipient_type,
+        order_index: r.approval_order
       })) || []
     }));
   }
 
   async getApprovalCardsByRecipient(recipientUserId: string): Promise<ApprovalCard[]> {
-    // Get cards where this user is the current recipient
+    // Get the recipient's UUID if we have a user_id string
+    let recipientUuid = recipientUserId;
+    if (!recipientUserId.match(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i)) {
+      const recipient = await this.getRecipientByUserId(recipientUserId);
+      if (recipient) {
+        recipientUuid = recipient.id;
+      }
+    }
+    
+    // Get cards where this user is the current approver (use correct column name)
     const { data: directCards, error: directError } = await supabase
       .from('approval_cards')
       .select(`
         *,
         card_recipients:approval_card_recipients(*)
       `)
-      .eq('current_recipient_id', recipientUserId)
+      .eq('current_approver_id', recipientUuid)
       .eq('status', 'pending')
       .order('created_at', { ascending: false });
 
     if (directError) throw directError;
 
     // Also get cards where this user is in the recipients list
+    // Use recipient_id (UUID) instead of recipient_user_id which doesn't exist
     const { data: recipientCards, error: recipientError } = await supabase
       .from('approval_card_recipients')
       .select(`
@@ -497,7 +615,7 @@ class SupabaseStorageService {
           card_recipients:approval_card_recipients(*)
         )
       `)
-      .eq('recipient_user_id', recipientUserId)
+      .eq('recipient_id', recipientUuid)
       .eq('status', 'pending');
 
     if (recipientError) throw recipientError;
@@ -506,43 +624,46 @@ class SupabaseStorageService {
     const allCards = [...(directCards || [])];
     const directIds = new Set(allCards.map(c => c.id));
     
-    recipientCards?.forEach(rc => {
+    recipientCards?.forEach((rc: any) => {
       if (rc.approval_card && !directIds.has(rc.approval_card.id)) {
         allCards.push(rc.approval_card);
       }
     });
 
     // Convert junction table objects to arrays for backward compatibility
+    // Note: approval_card_recipients table has: recipient_id (UUID), recipient_type, approval_order
     return allCards.map(card => ({
       ...card,
       recipients: card.card_recipients?.map((r: any) => ({
-        recipient_name: r.recipient_name,
-        recipient_user_id: r.recipient_user_id,
-        order_index: r.order_index
+        recipient_id: r.recipient_id,
+        recipient_type: r.recipient_type,
+        order_index: r.approval_order
       })) || []
     }));
   }
 
   async getApprovalCardByApprovalId(approvalId: string): Promise<ApprovalCard | null> {
+    // The approval_cards table uses 'card_id' not 'approval_id'
     const { data, error } = await supabase
       .from('approval_cards')
       .select(`
         *,
         card_recipients:approval_card_recipients(*)
       `)
-      .eq('approval_id', approvalId)
+      .eq('card_id', approvalId)
       .single();
 
     if (error && error.code !== 'PGRST116') throw error;
     if (!data) return null;
     
     // Convert junction table objects for backward compatibility
+    // Note: approval_card_recipients table has: recipient_id (UUID), recipient_type, approval_order
     return {
       ...data,
       recipients: data.card_recipients?.map((r: any) => ({
-        recipient_name: r.recipient_name,
-        recipient_user_id: r.recipient_user_id,
-        order_index: r.order_index
+        recipient_id: r.recipient_id,
+        recipient_type: r.recipient_type,
+        order_index: r.approval_order
       })) || []
     };
   }
@@ -551,40 +672,95 @@ class SupabaseStorageService {
     card: Partial<ApprovalCard>, 
     recipientIds: { id: string; userId: string; name: string }[]
   ): Promise<ApprovalCard> {
-    const approvalId = card.approval_id || `APPR-${Date.now()}`;
+    // Map routing type to valid enum value
+    const routingMap: Record<string, string> = {
+      'sequential': 'sequential',
+      'parallel': 'parallel',
+      'reverse': 'reverse',
+      'bidirectional': 'bidirectional',
+      'hybrid': 'hybrid',
+    };
     
-    // Use provided current_recipient_id, or default to first recipient
-    const currentRecipientId = card.current_recipient_id || recipientIds[0]?.userId;
+    // Map priority to valid enum value
+    const priorityMap: Record<string, string> = {
+      'low': 'low',
+      'normal': 'normal',
+      'medium': 'normal',
+      'high': 'high',
+      'urgent': 'urgent',
+      'emergency': 'emergency',
+    };
     
-    console.log('🔨 Creating approval card:', {
-      approvalId,
+    // Get submitted_by UUID - look up from recipients table
+    // UUID format: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx (36 chars, 8-4-4-4-12 hex)
+    const isValidUuid = (str: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str);
+    
+    let submittedByUuid = card.submitter_id;
+    if (card.submitter_id && !isValidUuid(card.submitter_id)) {
+      // If it's not a UUID, try to look up the recipient
+      console.log('🔍 Looking up UUID for card submitter:', card.submitter_id);
+      const recipient = await this.getRecipientByUserId(card.submitter_id);
+      if (recipient) {
+        submittedByUuid = recipient.id;
+        console.log('✅ Found card submitter UUID:', submittedByUuid);
+      } else {
+        console.error(`❌ Submitter ${card.submitter_id} not found in recipients table`);
+        throw new Error(`Submitter ${card.submitter_id} not found in recipients table. Cannot create approval card.`);
+      }
+    }
+    
+    // Get current_approver_id UUID from first recipient
+    let currentApproverUuid = recipientIds[0]?.id;
+    if (currentApproverUuid && !isValidUuid(currentApproverUuid)) {
+      // If it's not a UUID, try to look up
+      console.log('🔍 Looking up UUID for current approver:', recipientIds[0]?.userId);
+      const recipient = await this.getRecipientByUserId(recipientIds[0]?.userId || card.current_recipient_id || '');
+      if (recipient) {
+        currentApproverUuid = recipient.id;
+        console.log('✅ Found approver UUID:', currentApproverUuid);
+      } else {
+        console.error('❌ First recipient not found in recipients table');
+        throw new Error('First recipient not found in recipients table. Cannot create approval card.');
+      }
+    }
+    
+    // Store extra fields in metadata since they don't exist in schema
+    const metadata = {
+      ...(card.workflow || {}),
+      tracking_card_id: card.tracking_card_id,
+      submitter_name: card.submitter,
+      type: card.type,
+      is_emergency: card.is_emergency || false,
+      is_parallel: card.is_parallel || false,
+      source: card.source || 'document-management',
+      current_recipient_user_id: card.current_recipient_id,
+      recipient_names: recipientIds.map(r => r.name),
+      recipient_user_ids: recipientIds.map(r => r.userId),
+    };
+    
+    console.log('🔨 Creating approval card with mapped values:', {
       title: card.title,
-      currentRecipientId,
+      submitted_by: submittedByUuid,
+      current_approver_id: currentApproverUuid,
+      routing_type: routingMap[card.routing_type || 'sequential'] || 'sequential',
       recipientCount: recipientIds.length,
-      routingType: card.routing_type
     });
     
-    // Create approval card
+    // Create approval card using actual Supabase schema columns
     const { data: cardData, error: cardError } = await supabase
       .from('approval_cards')
       .insert({
-        approval_id: approvalId,
         document_id: card.document_id,
-        tracking_card_id: card.tracking_card_id,
         title: card.title,
         description: card.description,
-        type: card.type || 'Letter',
-        priority: card.priority || 'normal',
+        routing_type: routingMap[card.routing_type || 'sequential'] || 'sequential',
+        priority: priorityMap[card.priority || 'normal'] || 'normal',
         status: 'pending',
-        submitter: card.submitter,
-        submitter_id: card.submitter_id,
-        current_recipient_id: currentRecipientId,
-        routing_type: card.routing_type || 'sequential',
-        is_emergency: card.is_emergency || false,
-        is_parallel: card.is_parallel || false,
-        source: card.source || 'document-management',
-        workflow: card.workflow || {},
-        comments: card.comments,
+        submitted_by: submittedByUuid,
+        current_approver_id: currentApproverUuid,
+        current_step: 1,
+        total_steps: recipientIds.length,
+        metadata: metadata,
       })
       .select()
       .single();
@@ -594,34 +770,39 @@ class SupabaseStorageService {
       throw cardError;
     }
 
-    console.log('✅ Approval card created:', cardData.id);
+    console.log('✅ Approval card created:', cardData.id, 'card_id:', cardData.card_id);
 
-    // Add recipients
+    // Add recipients to approval_card_recipients
     if (recipientIds.length > 0) {
       const recipientRecords = recipientIds.map((r, index) => ({
         approval_card_id: cardData.id,
-        recipient_id: r.id,
-        recipient_user_id: r.userId,
-        recipient_name: r.name,
-        order_index: index,
-        status: index === 0 ? 'current' : 'pending', // First recipient is current
+        recipient_id: r.id, // This should be UUID
+        recipient_type: 'approver',
+        approval_order: index + 1,
+        status: index === 0 ? 'pending' : 'pending', // First recipient is active
       }));
 
-      console.log('📋 Adding recipients to approval card:', recipientRecords.map(r => r.recipient_name));
+      console.log('📋 Adding approval card recipients:', recipientRecords);
 
       const { error: recipientError } = await supabase
         .from('approval_card_recipients')
         .insert(recipientRecords);
 
       if (recipientError) {
-        console.error('❌ Error adding recipients:', recipientError);
-        throw recipientError;
+        console.error('❌ Error adding approval card recipients:', recipientError);
+        // Don't throw - card was created, recipients failed
+        console.warn('Approval card created but recipients not added. Verify recipient UUIDs exist.');
+      } else {
+        console.log(`✅ Added ${recipientIds.length} recipients to approval card`);
       }
-      
-      console.log(`✅ Added ${recipientIds.length} recipients to approval card`);
     }
 
-    return cardData;
+    // Return with approval_id for compatibility (use card_id from database)
+    return {
+      ...cardData,
+      approval_id: cardData.card_id,
+      tracking_card_id: card.tracking_card_id,
+    } as ApprovalCard;
   }
 
   async updateApprovalCardStatus(
@@ -763,10 +944,21 @@ class SupabaseStorageService {
   // ==================== NOTIFICATIONS ====================
 
   async getNotifications(userId: string): Promise<Notification[]> {
+    // Get recipient UUID from user_id
+    let recipientUuid = userId;
+    if (!userId.match(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i)) {
+      const recipient = await this.getRecipientByUserId(userId);
+      if (recipient) {
+        recipientUuid = recipient.id;
+      } else {
+        return []; // No matching recipient
+      }
+    }
+    
     const { data, error } = await supabase
       .from('notifications')
       .select('*')
-      .eq('recipient_user_id', userId)
+      .eq('recipient_id', recipientUuid)
       .order('created_at', { ascending: false })
       .limit(100);
 
@@ -775,16 +967,38 @@ class SupabaseStorageService {
   }
 
   async createNotification(notification: Partial<Notification>): Promise<Notification> {
+    // Get recipient UUID if needed
+    let recipientUuid = notification.recipient_id;
+    if (notification.recipient_user_id && !notification.recipient_id) {
+      const recipient = await this.getRecipientByUserId(notification.recipient_user_id);
+      if (recipient) {
+        recipientUuid = recipient.id;
+      }
+    }
+    
+    // Map notification type to valid enum value
+    const typeMap: Record<string, string> = {
+      'info': 'info',
+      'success': 'success',
+      'warning': 'warning',
+      'error': 'error',
+      'approval_request': 'approval_request',
+      'approval_approved': 'approval_approved',
+      'approval_rejected': 'approval_rejected',
+      'document_submitted': 'document_submitted',
+      'document_viewed': 'document_viewed',
+      'reminder': 'reminder',
+    };
+    
     const { data, error } = await supabase
       .from('notifications')
       .insert({
         notification_id: notification.notification_id || `NOTIF-${Date.now()}`,
-        recipient_id: notification.recipient_id,
-        recipient_user_id: notification.recipient_user_id,
+        recipient_id: recipientUuid,
+        notification_type: typeMap[notification.type || 'info'] || 'info',
+        priority: notification.priority || 'normal',
         title: notification.title,
         message: notification.message,
-        type: notification.type || 'info',
-        category: notification.category || 'general',
         is_read: false,
         action_url: notification.action_url,
         data: notification.data || {},
@@ -799,17 +1013,28 @@ class SupabaseStorageService {
   async markNotificationRead(notificationId: string): Promise<void> {
     const { error } = await supabase
       .from('notifications')
-      .update({ is_read: true })
+      .update({ is_read: true, read_at: new Date().toISOString() })
       .eq('notification_id', notificationId);
 
     if (error) throw error;
   }
 
   async markAllNotificationsRead(userId: string): Promise<void> {
+    // Get recipient UUID from user_id
+    let recipientUuid = userId;
+    if (!userId.match(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i)) {
+      const recipient = await this.getRecipientByUserId(userId);
+      if (recipient) {
+        recipientUuid = recipient.id;
+      } else {
+        return; // No matching recipient
+      }
+    }
+    
     const { error } = await supabase
       .from('notifications')
-      .update({ is_read: true })
-      .eq('recipient_user_id', userId)
+      .update({ is_read: true, read_at: new Date().toISOString() })
+      .eq('recipient_id', recipientUuid)
       .eq('is_read', false);
 
     if (error) throw error;
@@ -847,7 +1072,7 @@ class SupabaseStorageService {
       .eq('participant_user_id', userId);
 
     if (error) throw error;
-    return data?.map(d => d.meeting).filter(Boolean) || [];
+    return data?.map((d: any) => d.meeting).filter(Boolean) as Meeting[] || [];
   }
 
   async createMeeting(meeting: Partial<Meeting>, participantIds: { id: string; userId: string; name: string }[]): Promise<Meeting> {
@@ -1046,19 +1271,19 @@ class SupabaseStorageService {
     this.channels.clear();
   }
 
-  // Subscribe to documents for a specific submitter
+  // Subscribe to documents for a specific submitter (use created_by column)
   subscribeToDocuments(submitterId: string, callback: ChangeCallback<Document>): RealtimeChannel {
-    return this.subscribeToTable('documents', callback, { column: 'submitter_id', value: submitterId });
+    return this.subscribeToTable('documents', callback, { column: 'created_by', value: submitterId });
   }
 
-  // Subscribe to approval cards for a specific recipient
+  // Subscribe to approval cards for a specific recipient (use current_approver_id column)
   subscribeToApprovalCards(recipientId: string, callback: ChangeCallback<ApprovalCard>): RealtimeChannel {
-    return this.subscribeToTable('approval_cards', callback, { column: 'current_recipient_id', value: recipientId });
+    return this.subscribeToTable('approval_cards', callback, { column: 'current_approver_id', value: recipientId });
   }
 
-  // Subscribe to notifications for a specific user
+  // Subscribe to notifications for a specific user (use recipient_id column)
   subscribeToNotifications(userId: string, callback: ChangeCallback<Notification>): RealtimeChannel {
-    return this.subscribeToTable('notifications', callback, { column: 'recipient_user_id', value: userId });
+    return this.subscribeToTable('notifications', callback, { column: 'recipient_id', value: userId });
   }
 
   // Subscribe to all approval cards (for admin view)

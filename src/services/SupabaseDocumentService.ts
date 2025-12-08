@@ -155,7 +155,7 @@ class SupabaseDocumentService {
         *,
         doc_recipients:document_recipients(*)
       `)
-      .eq('submitter_id', submitterId)
+      .eq('created_by', submitterId)
       .order('created_at', { ascending: false });
 
     if (error) {
@@ -363,14 +363,28 @@ class SupabaseDocumentService {
    * Get pending approvals by recipient
    */
   async getPendingApprovalsByRecipient(recipientId: string): Promise<ApprovalCard[]> {
-    // Get cards where this user is the current recipient
+    // Get recipient UUID from user_id if needed
+    let recipientUuid = recipientId;
+    if (!recipientId.match(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i)) {
+      // Look up the recipient UUID
+      const { data: recipient } = await supabase
+        .from('recipients')
+        .select('id')
+        .eq('user_id', recipientId)
+        .single();
+      if (recipient) {
+        recipientUuid = recipient.id;
+      }
+    }
+    
+    // Get cards where this user is the current approver (correct column name)
     const { data: directCards, error: directError } = await supabase
       .from('approval_cards')
       .select(`
         *,
         card_recipients:approval_card_recipients(*)
       `)
-      .eq('current_recipient_id', recipientId)
+      .eq('current_approver_id', recipientUuid)
       .eq('status', 'pending')
       .order('created_at', { ascending: false });
 
@@ -380,6 +394,7 @@ class SupabaseDocumentService {
     }
 
     // Also get cards where this user is in the recipients list (for parallel routing)
+    // Use recipient_id (UUID) instead of recipient_user_id which doesn't exist
     const { data: recipientCards, error: recipientError } = await supabase
       .from('approval_card_recipients')
       .select(`
@@ -388,7 +403,7 @@ class SupabaseDocumentService {
           card_recipients:approval_card_recipients(*)
         )
       `)
-      .eq('recipient_user_id', recipientId)
+      .eq('recipient_id', recipientUuid)
       .eq('status', 'pending');
 
     if (recipientError) {
@@ -400,17 +415,18 @@ class SupabaseDocumentService {
     const allCards = [...(directCards || [])];
     const directIds = new Set(allCards.map(c => c.id));
     
-    recipientCards?.forEach(rc => {
+    recipientCards?.forEach((rc: any) => {
       if (rc.approval_card && !directIds.has(rc.approval_card.id)) {
         allCards.push(rc.approval_card);
       }
     });
 
     // Convert card_recipients to flat arrays for backward compatibility
+    // Note: approval_card_recipients table has: recipient_id (UUID), recipient_type, approval_order
     return allCards.map(card => ({
       ...card,
-      recipients: card.card_recipients?.map((r: any) => r.recipient_name) || [],
-      recipient_ids: card.card_recipients?.map((r: any) => r.recipient_user_id) || [],
+      recipients: card.card_recipients?.map((r: any) => r.recipient_type) || [],
+      recipient_ids: card.card_recipients?.map((r: any) => r.recipient_id) || [],
     }));
   }
 
@@ -418,13 +434,14 @@ class SupabaseDocumentService {
    * Update approval status
    */
   async updateApprovalStatus(approvalId: string, status: string): Promise<ApprovalCard> {
+    // Use card_id instead of approval_id
     const { data, error } = await supabase
       .from('approval_cards')
       .update({
         status,
         updated_at: new Date().toISOString(),
       })
-      .eq('approval_id', approvalId)
+      .eq('card_id', approvalId)
       .select()
       .single();
 

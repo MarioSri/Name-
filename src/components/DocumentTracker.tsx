@@ -255,25 +255,99 @@ export const DocumentTracker: React.FC<DocumentTrackerProps> = ({ userRole, user
     }
   };
   
+  // Track locally created documents that may not be in Supabase yet
+  const [locallyCreatedDocs, setLocallyCreatedDocs] = useState<Set<string>>(new Set());
 
-
-  // Use real-time documents
+  // Merge real-time documents with localStorage - PREVENT FLICKERING
+  // This ensures newly created cards don't disappear while waiting for Supabase sync
   useEffect(() => {
-    setSubmittedDocuments(trackDocuments);
+    // Get localStorage documents for merging
+    const storedDocs = JSON.parse(localStorage.getItem('submitted-documents') || '[]');
+    
+    // Create a map of Supabase docs by ID for quick lookup
+    const supabaseDocMap = new Map(trackDocuments.map(doc => [doc.id, doc]));
+    
+    // Merge: Start with Supabase data, then add any localStorage docs not in Supabase
+    const mergedDocs: Document[] = [...trackDocuments];
+    
+    // Add localStorage documents that aren't in Supabase yet (newly created)
+    storedDocs.forEach((storedDoc: any) => {
+      if (!supabaseDocMap.has(storedDoc.id)) {
+        // This doc exists in localStorage but not in Supabase - keep it!
+        console.log('📌 [Track Documents] Keeping localStorage doc not yet in Supabase:', storedDoc.id);
+        mergedDocs.unshift(storedDoc);
+        setLocallyCreatedDocs(prev => new Set(prev).add(storedDoc.id));
+      }
+    });
+    
+    // Only update if there's actual change to prevent unnecessary re-renders
+    setSubmittedDocuments(prev => {
+      const prevIds = new Set(prev.map(d => d.id));
+      const newIds = new Set(mergedDocs.map(d => d.id));
+      
+      // Check if the document sets are different
+      if (prevIds.size !== newIds.size || ![...prevIds].every(id => newIds.has(id))) {
+        console.log('📄 [Track Documents] Updating with merged documents:', mergedDocs.length);
+        return mergedDocs;
+      }
+      return prev;
+    });
   }, [trackDocuments]);
   
   // Load submitted documents and user profile from localStorage (fallback)
   useEffect(() => {
+    // Merge localStorage documents with current state (don't overwrite!)
     const loadSubmittedDocuments = () => {
       const stored = JSON.parse(localStorage.getItem('submitted-documents') || '[]');
       console.log('📄 [Track Documents] Loading submitted documents:', stored.length, 'documents');
       console.log('📋 [Track Documents] Documents:', stored.map(doc => ({ id: doc.id, title: doc.title, submittedBy: doc.submittedBy })));
-      if (trackDocuments.length === 0) {
-        setSubmittedDocuments(stored);
-      }
+      
+      // CRITICAL FIX: Merge localStorage with current state instead of replacing
+      setSubmittedDocuments(prev => {
+        const existingIds = new Set(prev.map(d => d.id));
+        const newDocs = stored.filter((doc: any) => !existingIds.has(doc.id));
+        
+        if (newDocs.length > 0) {
+          console.log('➕ [Track Documents] Adding', newDocs.length, 'new docs from localStorage');
+          return [...newDocs, ...prev];
+        }
+        
+        // If prev is empty but localStorage has docs, use localStorage
+        if (prev.length === 0 && stored.length > 0) {
+          console.log('📥 [Track Documents] Initializing from localStorage:', stored.length, 'docs');
+          return stored;
+        }
+        
+        return prev;
+      });
     };
     
-    const handleWorkflowUpdate = () => {
+    // Handle workflow updates from Approval Chain with Bypass
+    const handleWorkflowUpdate = (event?: any) => {
+      console.log('🔄 [Track Documents] Workflow update event received:', event?.detail);
+      
+      // If event contains trackingCard, add it directly to state
+      if (event?.detail?.trackingCard) {
+        const newCard = event.detail.trackingCard;
+        console.log('✨ [Track Documents] Workflow tracking card received:', newCard.title);
+        
+        setSubmittedDocuments(prev => {
+          const exists = prev.some(doc => doc.id === newCard.id);
+          if (!exists) {
+            console.log('✅ [Track Documents] Adding workflow tracking card to state');
+            return [newCard, ...prev];
+          }
+          return prev;
+        });
+        
+        toast({
+          title: "Document Tracking Started",
+          description: `${newCard.title} is now being tracked`,
+          duration: 3000,
+        });
+      }
+      
+      // Also reload from localStorage to catch any missed updates
       loadSubmittedDocuments();
     };
 

@@ -1,3 +1,10 @@
+/**
+ * EmergencyNotificationService
+ * 
+ * NOW USES IN-MEMORY STORAGE - NO localStorage
+ * TODO: Migrate to Supabase for persistent notification logs
+ */
+
 interface NotificationChannel {
   type: 'email' | 'sms' | 'push' | 'whatsapp';
   enabled: boolean;
@@ -34,6 +41,82 @@ interface EmergencyDocument {
   escalationTimeUnit?: string;
   cyclicEscalation?: boolean;
 }
+
+// In-memory storage to replace localStorage
+class InMemoryStorage {
+  private notificationLogs: any[] = [];
+  private emergencySubmissions: any[] = [];
+  private escalationData: Map<string, any> = new Map();
+  private notificationIntervals: Map<string, number> = new Map();
+  private recipientSettings: Map<string, NotificationChannel[]> = new Map();
+  private documentResponses: Map<string, any[]> = new Map();
+
+  // Notification logs
+  addNotificationLog(log: any): void {
+    this.notificationLogs.unshift(log);
+    if (this.notificationLogs.length > 1000) {
+      this.notificationLogs = this.notificationLogs.slice(0, 1000);
+    }
+  }
+
+  getNotificationLogs(): any[] {
+    return this.notificationLogs;
+  }
+
+  // Emergency submissions
+  addEmergencySubmission(submission: any): void {
+    this.emergencySubmissions.unshift(submission);
+    if (this.emergencySubmissions.length > 100) {
+      this.emergencySubmissions = this.emergencySubmissions.slice(0, 100);
+    }
+  }
+
+  getEmergencySubmissions(): any[] {
+    return this.emergencySubmissions;
+  }
+
+  // Escalation data
+  setEscalationData(documentId: string, data: any): void {
+    this.escalationData.set(documentId, data);
+  }
+
+  getEscalationData(documentId: string): any {
+    return this.escalationData.get(documentId) || {};
+  }
+
+  removeEscalationData(documentId: string): void {
+    this.escalationData.delete(documentId);
+  }
+
+  // Notification intervals
+  setNotificationInterval(notificationId: string, intervalId: number): void {
+    this.notificationIntervals.set(notificationId, intervalId);
+  }
+
+  getNotificationInterval(notificationId: string): number | undefined {
+    return this.notificationIntervals.get(notificationId);
+  }
+
+  removeNotificationInterval(notificationId: string): void {
+    this.notificationIntervals.delete(notificationId);
+  }
+
+  // Recipient settings
+  setRecipientSettings(recipientId: string, settings: NotificationChannel[]): void {
+    this.recipientSettings.set(recipientId, settings);
+  }
+
+  getRecipientSettings(recipientId: string): NotificationChannel[] | undefined {
+    return this.recipientSettings.get(recipientId);
+  }
+
+  // Document responses
+  getDocumentResponses(documentId: string): any[] {
+    return this.documentResponses.get(documentId) || [];
+  }
+}
+
+const storage = new InMemoryStorage();
 
 class EmergencyNotificationService {
   private static instance: EmergencyNotificationService;
@@ -102,9 +185,9 @@ class EmergencyNotificationService {
     recipientId: string,
     settings: EmergencyNotificationSettings
   ): NotificationChannel[] {
-    const saved = localStorage.getItem(`emergency-recipient-settings-${recipientId}`);
+    const saved = storage.getRecipientSettings(recipientId);
     if (saved) {
-      return JSON.parse(saved);
+      return saved;
     }
     return settings.channels;
   }
@@ -133,8 +216,8 @@ class EmergencyNotificationService {
         this.deliverNotification(recipientId, document, channel);
       }, intervalMs);
       
-      // Store interval ID for cleanup
-      localStorage.setItem(`notification-interval-${notificationId}`, recurringInterval.toString());
+      // Store interval ID for cleanup (in memory)
+      storage.setNotificationInterval(notificationId, recurringInterval as unknown as number);
     }, document.urgencyLevel === 'critical' ? 0 : intervalMs);
   }
 
@@ -169,10 +252,8 @@ class EmergencyNotificationService {
       delivered: true
     };
 
-    // Store notification log
-    const logs = JSON.parse(localStorage.getItem('emergency-notification-logs') || '[]');
-    logs.unshift(notification);
-    localStorage.setItem('emergency-notification-logs', JSON.stringify(logs.slice(0, 1000)));
+    // Store notification log (in memory)
+    storage.addNotificationLog(notification);
 
     // Simulate actual delivery based on channel
     switch (channel.type) {
@@ -228,9 +309,8 @@ class EmergencyNotificationService {
       status: 'sent'
     };
     
-    const logs = JSON.parse(localStorage.getItem('emergency-submissions') || '[]');
-    logs.unshift(emergencyLog);
-    localStorage.setItem('emergency-submissions', JSON.stringify(logs.slice(0, 100)));
+    // Log emergency submission (in memory)
+    storage.addEmergencySubmission(emergencyLog);
   }
 
   // Get predefined scheduling intervals
@@ -247,11 +327,11 @@ class EmergencyNotificationService {
 
   // Handle document rejection - stops escalation
   handleDocumentRejection(documentId: string, rejectedBy: string): void {
-    const escalationData = JSON.parse(localStorage.getItem(`escalation-${documentId}`) || '{}');
+    const escalationData = storage.getEscalationData(documentId);
     escalationData.escalationStopped = true;
     escalationData.rejectedBy = rejectedBy;
     escalationData.status = 'rejected';
-    localStorage.setItem(`escalation-${documentId}`, JSON.stringify(escalationData));
+    storage.setEscalationData(documentId, escalationData);
     
     // Stop all notifications for this document
     this.stopNotifications(documentId);
@@ -259,7 +339,7 @@ class EmergencyNotificationService {
 
   // Handle cyclic escalation for non-responsive recipients
   handleCyclicEscalation(documentId: string, recipients: string[]): void {
-    const escalationData = JSON.parse(localStorage.getItem(`escalation-${documentId}`) || '{}');
+    const escalationData = storage.getEscalationData(documentId);
     
     if (escalationData.escalationStopped) {
       return; // Don't escalate if document was rejected
@@ -276,7 +356,7 @@ class EmergencyNotificationService {
       escalationData.returnedToOriginal = true;
     }
     
-    localStorage.setItem(`escalation-${documentId}`, JSON.stringify(escalationData));
+    storage.setEscalationData(documentId, escalationData);
     
     // Send notification to next recipient
     const nextRecipient = recipients[nextIndex];
@@ -301,15 +381,13 @@ class EmergencyNotificationService {
       delivered: true
     };
 
-    // Store notification log
-    const logs = JSON.parse(localStorage.getItem('emergency-notification-logs') || '[]');
-    logs.unshift(notification);
-    localStorage.setItem('emergency-notification-logs', JSON.stringify(logs.slice(0, 1000)));
+    // Store notification log (in memory)
+    storage.addNotificationLog(notification);
   }
 
   // Get document by ID
   private getDocumentById(documentId: string): EmergencyDocument | null {
-    const submissions = JSON.parse(localStorage.getItem('emergency-submissions') || '[]');
+    const submissions = storage.getEmergencySubmissions();
     const submission = submissions.find((s: any) => s.id === documentId);
     return submission ? submission.document : null;
   }
@@ -330,7 +408,7 @@ class EmergencyNotificationService {
       timeUnit: document.escalationTimeUnit || 'hours'
     };
 
-    localStorage.setItem(`escalation-${document.id}`, JSON.stringify(escalationData));
+    storage.setEscalationData(document.id, escalationData);
 
     // Set up escalation timer
     const timeoutMs = this.convertToMilliseconds(escalationData.timeout, escalationData.timeUnit);
@@ -342,16 +420,16 @@ class EmergencyNotificationService {
 
   // Check if escalation is needed
   private checkForEscalation(documentId: string): void {
-    const escalationData = JSON.parse(localStorage.getItem(`escalation-${documentId}`) || '{}');
+    const escalationData = storage.getEscalationData(documentId);
     
     if (escalationData.escalationStopped) {
       return;
     }
 
     // Check if current recipient has responded
-    const hasResponse = this.checkRecipientResponse(documentId, escalationData.recipients[escalationData.currentRecipientIndex]);
+    const hasResponse = this.checkRecipientResponse(documentId, escalationData.recipients?.[escalationData.currentRecipientIndex]);
     
-    if (!hasResponse) {
+    if (!hasResponse && escalationData.recipients) {
       // Escalate to next recipient
       this.handleCyclicEscalation(documentId, escalationData.recipients);
       
@@ -365,25 +443,35 @@ class EmergencyNotificationService {
 
   // Check if recipient has responded
   private checkRecipientResponse(documentId: string, recipientId: string): boolean {
-    const responses = JSON.parse(localStorage.getItem(`document-responses-${documentId}`) || '[]');
+    const responses = storage.getDocumentResponses(documentId);
     return responses.some((response: any) => response.recipientId === recipientId);
   }
 
   // Stop all notifications for a document
   stopNotifications(documentId: string): void {
-    const logs = JSON.parse(localStorage.getItem('emergency-notification-logs') || '[]');
+    const logs = storage.getNotificationLogs();
     logs.forEach((log: any) => {
       if (log.documentId === documentId) {
-        const intervalId = localStorage.getItem(`notification-interval-${log.id}`);
+        const intervalId = storage.getNotificationInterval(log.id);
         if (intervalId) {
-          clearInterval(parseInt(intervalId));
-          localStorage.removeItem(`notification-interval-${log.id}`);
+          clearInterval(intervalId);
+          storage.removeNotificationInterval(log.id);
         }
       }
     });
     
     // Clear escalation data
-    localStorage.removeItem(`escalation-${documentId}`);
+    storage.removeEscalationData(documentId);
+  }
+  
+  // Public getter for notification logs
+  getNotificationLogs(): any[] {
+    return storage.getNotificationLogs();
+  }
+  
+  // Public getter for submission logs
+  getSubmissionLogs(): any[] {
+    return storage.getEmergencySubmissions();
   }
 }
 

@@ -18,9 +18,18 @@ export const NotificationCenter: React.FC = () => {
   useEffect(() => {
     loadNotifications();
     
+    // Initialize real-time for current user
+    const currentUserStr = localStorage.getItem('currentUser');
+    const currentUser = currentUserStr ? JSON.parse(currentUserStr) : null;
+    if (currentUser?.id) {
+      notificationService.initializeRealTime(currentUser.id);
+    }
+    
     const unsubscribeNotificationService = notificationService.subscribe((updatedNotifications) => {
-      setNotifications(updatedNotifications);
-      setUnreadCount(updatedNotifications.filter(n => !n.read).length);
+      // Ensure we always have an array
+      const notifs = Array.isArray(updatedNotifications) ? updatedNotifications : [];
+      setNotifications(notifs);
+      setUnreadCount(notifs.filter(n => !n.read).length);
     });
     
     const unsubscribe = onNotification((notification) => {
@@ -36,11 +45,15 @@ export const NotificationCenter: React.FC = () => {
 
   const loadNotifications = async () => {
     try {
-      const localNotifications = notificationService.getNotifications();
-      setNotifications(localNotifications);
-      setUnreadCount(localNotifications.filter(n => !n.read).length);
+      const localNotifications = await notificationService.getNotifications();
+      // Ensure we always have an array
+      const notifs = Array.isArray(localNotifications) ? localNotifications : [];
+      setNotifications(notifs);
+      setUnreadCount(notifs.filter(n => !n.read).length);
     } catch (error) {
       console.error('Failed to load notifications:', error);
+      setNotifications([]);
+      setUnreadCount(0);
     }
   };
 
@@ -60,17 +73,22 @@ export const NotificationCenter: React.FC = () => {
     }
   };
 
-  const markAllRead = () => {
+  const markAllRead = async () => {
     const updatedNotifications = notifications.map(n => ({ ...n, read: true }));
-    localStorage.setItem('notifications', JSON.stringify(updatedNotifications));
     setNotifications(updatedNotifications);
     setUnreadCount(0);
+    
+    // Update in Supabase
+    await notificationService.markAllAsRead();
   };
 
-  const clearAll = () => {
+  const clearAll = async () => {
+    // Delete all notifications
+    for (const notification of notifications) {
+      await notificationService.deleteNotification(notification.id);
+    }
     setNotifications([]);
     setUnreadCount(0);
-    localStorage.removeItem('notifications');
   };
 
   return (

@@ -23,6 +23,8 @@ import {
 } from "lucide-react";
 import { AdvancedSignatureIcon } from "@/components/ui/signature-icon";
 import { useToast } from "@/hooks/use-toast";
+import { useAuth } from "@/contexts/AuthContext";
+import { supabase } from "@/lib/supabase";
 
 interface AdvancedDigitalSignatureProps {
   userRole: string;
@@ -54,6 +56,7 @@ const formatDate = (date: Date | string): string => {
 };
 
 export const AdvancedDigitalSignature: React.FC<AdvancedDigitalSignatureProps> = ({ userRole }) => {
+  const { user } = useAuth();
   const [signatures, setSignatures] = useState<SignatureData[]>([]);
   const [selectedSignature, setSelectedSignature] = useState<SignatureData | null>(null);
   const [isDrawing, setIsDrawing] = useState(false);
@@ -70,24 +73,90 @@ export const AdvancedDigitalSignature: React.FC<AdvancedDigitalSignatureProps> =
   
   const { toast } = useToast();
 
-  useEffect(() => {
+  // Load signatures from Supabase
+  const loadSignatures = async () => {
+    if (!user?.id) return;
+    
     try {
-      const savedSignatures = localStorage.getItem('advancedSignatures');
-      if (savedSignatures) {
-        const parsed = JSON.parse(savedSignatures);
-        // Convert createdAt strings back to Date objects
-        const signatures = parsed.map((sig: any) => ({
-          ...sig,
-          createdAt: new Date(sig.createdAt)
+      const { data, error } = await supabase
+        .from('signatures')
+        .select('*')
+        .eq('user_id', user.id)
+        .order('created_at', { ascending: false });
+
+      if (error) throw error;
+
+      if (data) {
+        const mapped = data.map((sig: any) => ({
+          id: sig.id,
+          name: sig.name,
+          dataUrl: sig.data_url,
+          type: sig.type,
+          quality: sig.quality,
+          createdAt: new Date(sig.created_at),
+          metadata: sig.metadata || {}
         }));
-        setSignatures(signatures);
+        setSignatures(mapped);
       }
     } catch (error) {
-      console.error('Error loading signatures from localStorage:', error);
-      // Clear corrupted data
-      localStorage.removeItem('advancedSignatures');
+      console.error('Error loading signatures from Supabase:', error);
+      // Fallback to localStorage
+      try {
+        const savedSignatures = localStorage.getItem('advancedSignatures');
+        if (savedSignatures) {
+          const parsed = JSON.parse(savedSignatures);
+          const signatures = parsed.map((sig: any) => ({
+            ...sig,
+            createdAt: new Date(sig.createdAt)
+          }));
+          setSignatures(signatures);
+        }
+      } catch (e) {
+        console.error('Error loading from localStorage:', e);
+      }
     }
-  }, []);
+  };
+
+  useEffect(() => {
+    loadSignatures();
+  }, [user?.id]);
+
+  // Save signature to Supabase
+  const saveSignatureToSupabase = async (signature: SignatureData) => {
+    if (!user?.id) return;
+
+    try {
+      const { error } = await supabase
+        .from('signatures')
+        .upsert({
+          id: signature.id,
+          user_id: user.id,
+          name: signature.name,
+          data_url: signature.dataUrl,
+          type: signature.type,
+          quality: signature.quality,
+          metadata: signature.metadata
+        });
+
+      if (error) throw error;
+    } catch (error) {
+      console.error('Error saving signature to Supabase:', error);
+    }
+  };
+
+  // Delete signature from Supabase
+  const deleteSignatureFromSupabase = async (signatureId: string) => {
+    try {
+      const { error } = await supabase
+        .from('signatures')
+        .delete()
+        .eq('id', signatureId);
+
+      if (error) throw error;
+    } catch (error) {
+      console.error('Error deleting signature from Supabase:', error);
+    }
+  };
 
   const saveSignatures = (newSignatures: SignatureData[]) => {
     setSignatures(newSignatures);
@@ -185,7 +254,7 @@ export const AdvancedDigitalSignature: React.FC<AdvancedDigitalSignatureProps> =
     return Math.min(coverage * 10, 100); // Scale to 0-100
   };
 
-  const saveSignature = () => {
+  const saveSignature = async () => {
     const canvas = canvasRef.current;
     if (!canvas || !signatureName.trim()) {
       toast({
@@ -223,6 +292,9 @@ export const AdvancedDigitalSignature: React.FC<AdvancedDigitalSignatureProps> =
         role: userRole
       }
     };
+
+    // Save to Supabase
+    await saveSignatureToSupabase(newSignature);
 
     const updatedSignatures = [...signatures, newSignature];
     saveSignatures(updatedSignatures);
@@ -407,7 +479,10 @@ export const AdvancedDigitalSignature: React.FC<AdvancedDigitalSignatureProps> =
     reader.readAsDataURL(file);
   };
 
-  const deleteSignature = (id: string) => {
+  const deleteSignature = async (id: string) => {
+    // Delete from Supabase
+    await deleteSignatureFromSupabase(id);
+    
     const updatedSignatures = signatures.filter(sig => sig.id !== id);
     saveSignatures(updatedSignatures);
     

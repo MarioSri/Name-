@@ -9,6 +9,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useNavigate } from "react-router-dom";
 import { WorkflowBuilder } from "@/components/WorkflowBuilder";
 import { useAuth } from "@/contexts/AuthContext";
+import { useRealTimeDocuments } from "@/hooks/useRealTimeDocuments";
 import { useState, useEffect } from "react";
 
 const WorkflowManagement = () => {
@@ -16,6 +17,30 @@ const WorkflowManagement = () => {
   const { toast } = useToast();
   const navigate = useNavigate();
   const [expandedHierarchy, setExpandedHierarchy] = useState<number | null>(null);
+  const { trackDocuments, approvalCards, isConnected } = useRealTimeDocuments();
+
+  // Calculate real stats from Supabase data
+  const [stats, setStats] = useState({
+    activeWorkflows: 3,
+    documentsInProgress: 0,
+    completedToday: 0
+  });
+
+  useEffect(() => {
+    const allDocs = [...trackDocuments, ...approvalCards];
+    const inProgress = allDocs.filter(d => d.status === 'pending' || d.status === 'submitted').length;
+    const today = new Date().toDateString();
+    const completedToday = allDocs.filter(d => 
+      d.status === 'approved' && 
+      new Date(d.lastModified || d.submittedDate || '').toDateString() === today
+    ).length;
+    
+    setStats({
+      activeWorkflows: 3,
+      documentsInProgress: inProgress,
+      completedToday
+    });
+  }, [trackDocuments, approvalCards]);
 
   const handleLogout = () => {
     logout();
@@ -109,7 +134,7 @@ const WorkflowManagement = () => {
                       <Workflow className="h-6 w-6 text-primary" />
                     </div>
                     <div>
-                      <p className="text-2xl font-bold">3</p>
+                      <p className="text-2xl font-bold">{stats.activeWorkflows}</p>
                       <p className="text-sm text-muted-foreground">Active Workflows</p>
                     </div>
                   </div>
@@ -123,8 +148,8 @@ const WorkflowManagement = () => {
                       <Clock className="h-6 w-6 text-warning" />
                     </div>
                     <div>
-                      <p className="text-2xl font-bold">12</p>
-                      <p className="text-sm text-muted-foreground">Pending Approvals</p>
+                      <p className="text-2xl font-bold">{stats.documentsInProgress}</p>
+                      <p className="text-sm text-muted-foreground">Documents In Progress</p>
                     </div>
                   </div>
                 </CardContent>
@@ -137,8 +162,8 @@ const WorkflowManagement = () => {
                       <CheckCircle2 className="h-6 w-6 text-success" />
                     </div>
                     <div>
-                      <p className="text-2xl font-bold">89</p>
-                      <p className="text-sm text-muted-foreground">Completed This Month</p>
+                      <p className="text-2xl font-bold">{stats.completedToday}</p>
+                      <p className="text-sm text-muted-foreground">Completed Today</p>
                     </div>
                   </div>
                 </CardContent>
