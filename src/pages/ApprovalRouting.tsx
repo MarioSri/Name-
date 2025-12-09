@@ -51,8 +51,8 @@ const ApprovalRouting: React.FC = () => {
   const [stats, setStats] = useState({
     pendingApprovals: 0,
     completedToday: 0,
-    averageTime: '2.3 hours',
-    bypassCount: '5%',
+    averageTime: '0 hours',
+    bypassCount: '0',
     responseRate: 0
   });
 
@@ -72,8 +72,8 @@ const ApprovalRouting: React.FC = () => {
     setStats({
       pendingApprovals: pending,
       completedToday,
-      averageTime: '2.3 hours',
-      bypassCount: '5%',
+      averageTime: '0 hours',
+      bypassCount: '0',
       responseRate
     });
   }, [trackDocuments, approvalCards]);

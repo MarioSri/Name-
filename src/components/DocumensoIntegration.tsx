@@ -2262,8 +2262,6 @@ export const DocumensoIntegration: React.FC<DocumensoIntegrationProps> = ({
               </CardContent>
             </Card>
 
-
-
             {/* Processing/Completed States */}
             {isProcessing ? (
               <Card>

@@ -53,7 +53,7 @@ const Analytics = () => {
       approved,
       rejected,
       pending,
-      avgProcessingTime: 2.2,
+      avgProcessingTime: 0,
       todayDocuments: todayDocs,
       activeSessions: allDocs.filter(d => d.status === 'pending').length
     });
@@ -89,20 +89,23 @@ const Analytics = () => {
     };
   }, [trackDocuments, approvalCards]);
 
+  // Department stats - Principal sees all, others see their department
   const departmentStats = user.role === 'principal' ? [
     { name: "Computer Science", submitted: 45, approved: 38, rejected: 7, pending: 0 },
     { name: "Electrical Engineering", submitted: 32, approved: 28, rejected: 2, pending: 2 },
     { name: "Mechanical Engineering", submitted: 28, approved: 24, rejected: 3, pending: 1 },
     { name: "Electronics & Communication", submitted: 35, approved: 30, rejected: 4, pending: 1 },
     { name: "Civil Engineering", submitted: 22, approved: 20, rejected: 1, pending: 1 }
-  ] : [];
+  ] : [
+    { name: user.department || "My Department", submitted: metrics.totalDocuments, approved: metrics.approved, rejected: metrics.rejected, pending: metrics.pending }
+  ];
 
-  const monthlyTrends = user.role === 'principal' ? [
+  const monthlyTrends = [
     { month: "Oct", documents: 120, approved: 98, rejected: 15, avgTime: 2.3 },
     { month: "Nov", documents: 135, approved: 115, rejected: 12, avgTime: 2.1 },
     { month: "Dec", documents: 98, approved: 85, rejected: 8, avgTime: 1.9 },
     { month: "Jan", documents: metrics.totalDocuments || 162, approved: metrics.approved || 140, rejected: metrics.rejected || 17, avgTime: metrics.avgProcessingTime || 2.2 }
-  ] : [];
+  ];
 
   return (
     <DashboardLayout userRole={user.role} onLogout={handleLogout}>
@@ -112,7 +115,7 @@ const Analytics = () => {
           <p className="text-muted-foreground">Comprehensive insights into document workflow performance</p>
         </div>
 
-        {user.role === 'principal' && (
+        {/* Analytics Metrics - Available for All Roles */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
           <Card>
             <CardContent className="p-6">
@@ -195,12 +198,11 @@ const Analytics = () => {
             </CardContent>
           </Card>
         </div>
-        )}
 
         <Tabs defaultValue="overview" className="space-y-6">
           <TabsList className="grid w-full grid-cols-4">
             <TabsTrigger value="overview">Overview</TabsTrigger>
-            <TabsTrigger value="departments">Departments</TabsTrigger>
+            <TabsTrigger value="departments">{user.role === 'principal' ? 'Departments' : 'My Department'}</TabsTrigger>
             <TabsTrigger value="trends">Trends</TabsTrigger>
             <TabsTrigger value="performance">Performance</TabsTrigger>
           </TabsList>
@@ -220,27 +222,39 @@ const Analytics = () => {
                       <span>Approved</span>
                       <div className="flex items-center gap-2">
                         <div className="w-32 bg-muted rounded-full h-2">
-                          <div className="bg-success h-2 rounded-full" style={{ width: "86.4%" }}></div>
+                          <div className="bg-success h-2 rounded-full" style={{ 
+                            width: `${metrics.totalDocuments > 0 ? (metrics.approved / metrics.totalDocuments * 100) : 0}%` 
+                          }}></div>
                         </div>
-                        <span className="text-sm font-medium">86.4%</span>
+                        <span className="text-sm font-medium">
+                          {metrics.totalDocuments > 0 ? ((metrics.approved / metrics.totalDocuments) * 100).toFixed(1) : 0}%
+                        </span>
                       </div>
                     </div>
                     <div className="flex items-center justify-between">
                       <span>Rejected</span>
                       <div className="flex items-center gap-2">
                         <div className="w-32 bg-muted rounded-full h-2">
-                          <div className="bg-destructive h-2 rounded-full" style={{ width: "10.5%" }}></div>
+                          <div className="bg-destructive h-2 rounded-full" style={{ 
+                            width: `${metrics.totalDocuments > 0 ? (metrics.rejected / metrics.totalDocuments * 100) : 0}%` 
+                          }}></div>
                         </div>
-                        <span className="text-sm font-medium">10.5%</span>
+                        <span className="text-sm font-medium">
+                          {metrics.totalDocuments > 0 ? ((metrics.rejected / metrics.totalDocuments) * 100).toFixed(1) : 0}%
+                        </span>
                       </div>
                     </div>
                     <div className="flex items-center justify-between">
                       <span>Pending</span>
                       <div className="flex items-center gap-2">
                         <div className="w-32 bg-muted rounded-full h-2">
-                          <div className="bg-warning h-2 rounded-full" style={{ width: "3.1%" }}></div>
+                          <div className="bg-warning h-2 rounded-full" style={{ 
+                            width: `${metrics.totalDocuments > 0 ? (metrics.pending / metrics.totalDocuments * 100) : 0}%` 
+                          }}></div>
                         </div>
-                        <span className="text-sm font-medium">3.1%</span>
+                        <span className="text-sm font-medium">
+                          {metrics.totalDocuments > 0 ? ((metrics.pending / metrics.totalDocuments) * 100).toFixed(1) : 0}%
+                        </span>
                       </div>
                     </div>
                   </div>
@@ -264,7 +278,7 @@ const Analytics = () => {
                           <span className="text-sm">{dept.name}</span>
                         </div>
                         <span className="text-sm font-medium">
-                          {((dept.approved / dept.submitted) * 100).toFixed(1)}%
+                          {dept.submitted > 0 ? ((dept.approved / dept.submitted) * 100).toFixed(1) : 0}%
                         </span>
                       </div>
                     ))}
@@ -277,8 +291,10 @@ const Analytics = () => {
           <TabsContent value="departments" className="space-y-6">
             <Card>
               <CardHeader>
-                <CardTitle>Department-wise Analytics</CardTitle>
-                <CardDescription>Document submission and approval statistics by department</CardDescription>
+                <CardTitle>{user.role === 'principal' ? 'Department-wise Analytics' : 'My Department Analytics'}</CardTitle>
+                <CardDescription>
+                  {user.role === 'principal' ? 'Document submission and approval statistics by department' : 'Your department document statistics'}
+                </CardDescription>
               </CardHeader>
               <CardContent>
                 <div className="space-y-4">
@@ -353,7 +369,7 @@ const Analytics = () => {
                       <h4 className="text-sm font-medium text-muted-foreground">Completed Tasks</h4>
                       <div className="w-2 h-2 bg-green-500 rounded-full"></div>
                     </div>
-                    <p className="text-2xl font-bold">15</p>
+                    <p className="text-2xl font-bold">0</p>
                     <p className="text-xs text-muted-foreground">Tasks finished today</p>
                   </div>
                   <div className="p-4 border rounded-lg">
@@ -478,15 +494,15 @@ const Analytics = () => {
                     <div className="space-y-3">
                       <div className="flex justify-between">
                         <span className="text-sm">Average Processing Time</span>
-                        <span className="font-medium">2.2 days</span>
+                        <span className="font-medium">0 days</span>
                       </div>
                       <div className="flex justify-between">
                         <span className="text-sm">Fastest Approval</span>
-                        <span className="font-medium">4 hours</span>
+                        <span className="font-medium">0 hours</span>
                       </div>
                       <div className="flex justify-between">
                         <span className="text-sm">Longest Processing</span>
-                        <span className="font-medium">7 days</span>
+                        <span className="font-medium">0 days</span>
                       </div>
                     </div>
                   </div>
@@ -495,15 +511,15 @@ const Analytics = () => {
                     <div className="space-y-3">
                       <div className="flex justify-between">
                         <span className="text-sm">First-time Approval Rate</span>
-                        <span className="font-medium">78.5%</span>
+                        <span className="font-medium">0%</span>
                       </div>
                       <div className="flex justify-between">
                         <span className="text-sm">Resubmission Rate</span>
-                        <span className="font-medium">12.3%</span>
+                        <span className="font-medium">0%</span>
                       </div>
                       <div className="flex justify-between">
                         <span className="text-sm">User Satisfaction</span>
-                        <span className="font-medium">4.6/5.0</span>
+                        <span className="font-medium">0/5.0</span>
                       </div>
                     </div>
                   </div>

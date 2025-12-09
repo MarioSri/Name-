@@ -106,16 +106,16 @@ export const CalendarWidget: React.FC<CalendarWidgetProps> = ({
           .from('meetings')
           .select(`
             *,
-            host:recipients!meetings_host_id_fkey(name, email, role),
-            meeting_attendees(
-              recipient:recipients(id, user_id, name, email, role, department),
-              status,
-              is_required
+            organizer:recipients!meetings_organizer_id_fkey(name, email, role),
+            meeting_participants(
+              participant:recipients(id, user_id, name, email, role, department),
+              role,
+              response_status
             )
           `)
-          .or(`host_id.eq.${user.supabaseUuid},meeting_attendees.recipient_id.eq.${user.supabaseUuid}`)
-          .gte('date', new Date().toISOString().split('T')[0])
-          .order('date', { ascending: true });
+          .or(`organizer_id.eq.${user.supabaseUuid},meeting_participants.participant_id.eq.${user.supabaseUuid}`)
+          .gte('start_time', new Date().toISOString())
+          .order('start_time', { ascending: true });
         
         if (error) {
           console.error('[Calendar Widget] ❌ Supabase error:', error);
@@ -129,29 +129,29 @@ export const CalendarWidget: React.FC<CalendarWidgetProps> = ({
           id: m.id,
           title: m.title,
           description: m.description,
-          date: m.date,
-          time: m.start_time,
-          duration: m.duration || 60,
-          attendees: (m.meeting_attendees || []).map((a: any) => ({
-            id: a.recipient?.user_id || a.recipient?.id,
-            name: a.recipient?.name,
-            email: a.recipient?.email,
-            role: a.recipient?.role,
-            department: a.recipient?.department,
-            status: a.status || 'pending',
-            isRequired: a.is_required
+          date: m.start_time ? new Date(m.start_time).toISOString().split('T')[0] : new Date().toISOString().split('T')[0],
+          time: m.start_time ? new Date(m.start_time).toLocaleTimeString() : '',
+          duration: m.end_time && m.start_time ? Math.round((new Date(m.end_time).getTime() - new Date(m.start_time).getTime()) / 60000) : 60,
+          attendees: (m.meeting_participants || []).map((a: any) => ({
+            id: a.participant?.user_id || a.participant?.id,
+            name: a.participant?.name,
+            email: a.participant?.email,
+            role: a.participant?.role || a.role,
+            department: a.participant?.department,
+            status: a.response_status || 'pending',
+            isRequired: true
           })),
           location: m.location,
-          type: m.type || 'online',
+          type: m.meeting_type || 'online',
           status: m.status || 'scheduled',
-          priority: m.priority || 'medium',
-          createdBy: m.host_id,
-          category: m.category || 'general',
+          priority: m.priority || 'normal',
+          createdBy: m.organizer_id,
+          category: 'general',
           isRecurring: m.is_recurring || false,
-          tags: m.tags || [],
+          tags: [],
           department: m.department,
-          documents: m.documents || [],
-          meetingLinks: m.meeting_links,
+          documents: m.attachments || [],
+          meetingLinks: m.meeting_url,
           createdAt: new Date(m.created_at),
           updatedAt: new Date(m.updated_at)
         }));
@@ -181,7 +181,7 @@ export const CalendarWidget: React.FC<CalendarWidgetProps> = ({
       )
       .on(
         'postgres_changes',
-        { event: '*', schema: 'public', table: 'meeting_attendees' },
+        { event: '*', schema: 'public', table: 'meeting_participants' },
         (payload) => {
           console.log('[Calendar Widget] Real-time attendee update:', payload.eventType);
           fetchMeetings();

@@ -1053,7 +1053,7 @@ export function MeetingScheduler({ userRole, className }: MeetingSchedulerProps)
                       <div className="flex items-center justify-between">
                         <div>
                           <p className="text-sm text-muted-foreground">Total Meetings</p>
-                          <p className="text-2xl font-bold">2</p>
+                          <p className="text-2xl font-bold">0</p>
                         </div>
                         <CalendarIcon className="w-8 h-8 text-muted-foreground" />
                       </div>
@@ -1077,7 +1077,7 @@ export function MeetingScheduler({ userRole, className }: MeetingSchedulerProps)
                       <div className="flex items-center justify-between">
                         <div>
                           <p className="text-sm text-muted-foreground">Online Meetings</p>
-                          <p className="text-2xl font-bold">2</p>
+                          <p className="text-2xl font-bold">0</p>
                         </div>
                         <Video className="w-8 h-8 text-muted-foreground" />
                       </div>
@@ -1089,7 +1089,7 @@ export function MeetingScheduler({ userRole, className }: MeetingSchedulerProps)
                       <div className="flex items-center justify-between">
                         <div>
                           <p className="text-sm text-muted-foreground">Avg Duration</p>
-                          <p className="text-2xl font-bold">105m</p>
+                          <p className="text-2xl font-bold">0m</p>
                         </div>
                         <Timer className="w-8 h-8 text-muted-foreground" />
                       </div>

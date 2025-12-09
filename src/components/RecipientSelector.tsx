@@ -27,6 +27,7 @@ import {
 
 interface Recipient {
   id: string;
+  supabaseId?: string; // The actual UUID from Supabase recipients table
   name: string;
   role: string;
   department?: string;
@@ -156,8 +157,11 @@ export const RecipientSelector: React.FC<RecipientSelectorProps> = ({
     const loadRecipients = async () => {
       try {
         const data = await supabaseWorkflowService.getRecipients();
+        // Use user_id as the id for backward compatibility with the approval system
+        // The useSupabaseRealTimeDocuments hook will look up the UUID from user_id
         setAllRecipients(data.map(r => ({
-          id: r.user_id,
+          id: r.user_id, // Keep using user_id for backward compatibility
+          supabaseId: r.id, // Store the actual UUID for direct Supabase operations
           name: r.name,
           email: r.email,
           role: r.role,

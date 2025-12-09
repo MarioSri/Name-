@@ -16,8 +16,10 @@ export interface Channel {
   members: string[];
   member_ids: string[];
   created_by: string;
-  is_active: boolean;
-  auto_delete_hours?: number;
+  is_archived: boolean;
+  is_readonly?: boolean;
+  auto_delete_enabled?: boolean;
+  auto_delete_days?: number;
   created_at: string;
   updated_at: string;
 }

@@ -201,7 +201,7 @@ export function useSupabaseRealTimeMessages(): UseSupabaseRealTimeMessagesResult
       const { data: channelsData, error: channelsError } = await supabase
         .from('channels')
         .select('*')
-        .eq('is_active', true)
+        .eq('is_archived', false)
         .order('updated_at', { ascending: false });
 
       if (channelsError) {

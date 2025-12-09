@@ -3,7 +3,7 @@
  * LiveMeet+, Notes & Reminders, Analytics, Approval History, Notifications, Search
  */
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
 import { 
   supabaseRealTimeFeatures,
@@ -39,10 +39,16 @@ export function useSupabaseLiveMeet() {
     }
   }, [user?.id]);
 
+  // Use ref to avoid stale closures
+  const fetchRequestsRef = useRef(fetchRequests);
+  useEffect(() => {
+    fetchRequestsRef.current = fetchRequests;
+  }, [fetchRequests]);
+
   useEffect(() => {
     if (!user?.id) return;
 
-    fetchRequests();
+    fetchRequestsRef.current();
 
     // Subscribe to real-time updates
     const unsubscribe = supabaseRealTimeFeatures.subscribeLiveMeetRequests(
@@ -51,7 +57,7 @@ export function useSupabaseLiveMeet() {
     );
 
     return () => unsubscribe();
-  }, [user?.id, fetchRequests]);
+  }, [user?.id]);
 
   const createRequest = useCallback(async (
     request: Omit<LiveMeetRequest, 'request_id' | 'submitter_id' | 'submitter_name'>,
@@ -110,14 +116,19 @@ export function useSupabaseNotes() {
     }
   }, [user?.id]);
 
+  const fetchNotesRef = useRef(fetchNotes);
+  useEffect(() => {
+    fetchNotesRef.current = fetchNotes;
+  }, [fetchNotes]);
+
   useEffect(() => {
     if (!user?.id) return;
 
-    fetchNotes();
+    fetchNotesRef.current();
 
     const unsubscribe = supabaseRealTimeFeatures.subscribeNotes(user.id, setNotes);
     return () => unsubscribe();
-  }, [user?.id, fetchNotes]);
+  }, [user?.id]);
 
   const createNote = useCallback(async (note: Omit<Note, 'note_id' | 'owner_id' | 'owner_name'>) => {
     if (!user) return null;
@@ -178,14 +189,19 @@ export function useSupabaseReminders() {
     }
   }, [user?.id]);
 
+  const fetchRemindersRef = useRef(fetchReminders);
+  useEffect(() => {
+    fetchRemindersRef.current = fetchReminders;
+  }, [fetchReminders]);
+
   useEffect(() => {
     if (!user?.id) return;
 
-    fetchReminders();
+    fetchRemindersRef.current();
 
     const unsubscribe = supabaseRealTimeFeatures.subscribeReminders(user.id, setReminders);
     return () => unsubscribe();
-  }, [user?.id, fetchReminders]);
+  }, [user?.id]);
 
   const createReminder = useCallback(async (reminder: Omit<Reminder, 'reminder_id' | 'owner_id' | 'owner_name'>) => {
     if (!user) return null;
@@ -269,14 +285,19 @@ export function useSupabaseApprovalHistory() {
     }
   }, []);
 
+  const fetchHistoryRef = useRef(fetchHistory);
+  useEffect(() => {
+    fetchHistoryRef.current = fetchHistory;
+  }, [fetchHistory]);
+
   useEffect(() => {
     if (!user?.id) return;
 
-    fetchHistory({ limit: 50 });
+    fetchHistoryRef.current({ limit: 50 });
 
     const unsubscribe = supabaseRealTimeFeatures.subscribeApprovalHistory(user.id, setHistory);
     return () => unsubscribe();
-  }, [user?.id, fetchHistory]);
+  }, [user?.id]);
 
   const addHistory = useCallback(async (
     history: Omit<ApprovalHistoryItem, 'history_id' | 'action_by_id' | 'action_by_name' | 'action_by_role'>
@@ -332,10 +353,15 @@ export function useSupabaseNotifications() {
     }
   }, [user?.id]);
 
+  const fetchNotificationsRef = useRef(fetchNotifications);
+  useEffect(() => {
+    fetchNotificationsRef.current = fetchNotifications;
+  }, [fetchNotifications]);
+
   useEffect(() => {
     if (!user?.id) return;
 
-    fetchNotifications();
+    fetchNotificationsRef.current();
 
     const unsubscribe = supabaseRealTimeFeatures.subscribeNotifications(user.id, (data) => {
       setNotifications(data);
@@ -343,7 +369,7 @@ export function useSupabaseNotifications() {
     });
 
     return () => unsubscribe();
-  }, [user?.id, fetchNotifications]);
+  }, [user?.id]);
 
   const createNotification = useCallback(async (
     notification: Omit<Notification, 'notification_id'>

@@ -90,8 +90,8 @@ const CommunicationCenter: React.FC = () => {
     setStats({
       unreadMessages: 12,
       pendingSignatures: 3,
-      activePolls: 2,
-      onlineUsers: 45,
+      activePolls: 0,
+      onlineUsers: 0,
       totalChannels: 8,
       documentsShared: 156
     });

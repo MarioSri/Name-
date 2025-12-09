@@ -157,44 +157,31 @@ class SupabaseRealTimeFeaturesService {
 
   async createLiveMeetRequest(request: LiveMeetRequest, participants: string[]): Promise<LiveMeetRequest | null> {
     try {
-      const { data, error } = await supabase
-        .from('livemeet_requests')
-        .insert({
-          request_id: request.request_id || `livemeet-${Date.now()}`,
-          title: request.title,
-          description: request.description,
-          submitter_id: request.submitter_id,
-          submitter_name: request.submitter_name,
-          submitter_role: request.submitter_role,
-          submitter_department: request.submitter_department,
-          request_type: request.request_type || 'meeting',
-          priority: request.priority || 'normal',
-          status: 'pending',
-          scheduled_time: request.scheduled_time,
-          duration_minutes: request.duration_minutes || 30,
-          location: request.location,
-          is_emergency: request.is_emergency || false,
-          metadata: request.metadata || {}
-        })
-        .select()
-        .single();
+      // Note: live_meeting_requests table uses requester_id and target_id
+      // We create one request per target participant
+      const results: LiveMeetRequest[] = [];
+      
+      for (const targetId of participants) {
+        const { data, error } = await supabase
+          .from('live_meeting_requests')
+          .insert({
+            title: request.title,
+            reason: request.description,
+            urgency: request.priority === 'urgent' || request.priority === 'emergency' ? 'urgent' : 
+                     request.is_emergency ? 'immediate' : 'normal',
+            requester_id: request.submitter_id,
+            target_id: targetId,
+            status: 'pending'
+          })
+          .select()
+          .single();
 
-      if (error) throw error;
-
-      // Add participants
-      if (data && participants.length > 0) {
-        const participantRecords = participants.map(p => ({
-          request_id: data.id,
-          participant_id: p,
-          participant_name: p, // Will be resolved from recipients
-          status: 'pending'
-        }));
-
-        await supabase.from('livemeet_participants').insert(participantRecords);
+        if (error) throw error;
+        if (data) results.push(data);
       }
 
-      console.log('✅ LiveMeet+ request created:', data?.request_id);
-      return data;
+      console.log('✅ LiveMeet+ request(s) created:', results.length);
+      return results[0] || null;
     } catch (error) {
       console.error('❌ Failed to create LiveMeet+ request:', error);
       return null;
@@ -203,29 +190,36 @@ class SupabaseRealTimeFeaturesService {
 
   async getLiveMeetRequests(userId: string): Promise<LiveMeetRequest[]> {
     try {
-      // Get requests where user is a participant (not the submitter)
-      const { data: participantData } = await supabase
-        .from('livemeet_participants')
-        .select('request_id')
-        .eq('participant_id', userId);
-
-      const requestIds = participantData?.map(p => p.request_id) || [];
-
-      if (requestIds.length === 0) return [];
-
+      // Get requests where user is the target (recipient)
       const { data, error } = await supabase
-        .from('livemeet_requests')
+        .from('live_meeting_requests')
         .select(`
           *,
-          livemeet_participants (*)
+          requester:requester_id(id, name, user_id, role, department),
+          target:target_id(id, name, user_id, role, department)
         `)
-        .in('id', requestIds)
-        .neq('submitter_id', userId) // Exclude requests created by user
+        .eq('target_id', userId)
         .eq('status', 'pending')
         .order('created_at', { ascending: false });
 
       if (error) throw error;
-      return data || [];
+      
+      // Transform to expected format
+      const transformed = (data || []).map(req => ({
+        ...req,
+        request_id: req.request_id,
+        title: req.title,
+        description: req.reason,
+        submitter_id: req.requester_id,
+        submitter_name: req.requester?.name || 'Unknown',
+        submitter_role: req.requester?.role,
+        submitter_department: req.requester?.department,
+        priority: req.urgency === 'immediate' ? 'emergency' : req.urgency === 'urgent' ? 'urgent' : 'normal',
+        status: req.status,
+        participants: [{ participant_id: req.target_id, participant_name: req.target?.name, status: req.status }]
+      }));
+      
+      return transformed;
     } catch (error) {
       console.error('❌ Failed to get LiveMeet+ requests:', error);
       return [];
@@ -234,38 +228,19 @@ class SupabaseRealTimeFeaturesService {
 
   async updateLiveMeetRequestStatus(requestId: string, status: string, participantId?: string): Promise<boolean> {
     try {
-      if (participantId) {
-        // Update participant response
-        const { error } = await supabase
-          .from('livemeet_participants')
-          .update({ 
-            status, 
-            response_at: new Date().toISOString() 
-          })
-          .eq('request_id', requestId)
-          .eq('participant_id', participantId);
+      // Update the request status directly
+      const { error } = await supabase
+        .from('live_meeting_requests')
+        .update({ 
+          status: status === 'accepted' ? 'accepted' : status === 'declined' ? 'declined' : status,
+          responded_at: new Date().toISOString(),
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', requestId);
 
-        if (error) throw error;
-      }
+      if (error) throw error;
 
-      // Update main request status if all participants responded
-      const { data: participants } = await supabase
-        .from('livemeet_participants')
-        .select('status')
-        .eq('request_id', requestId);
-
-      const allResponded = participants?.every(p => p.status !== 'pending');
-      if (allResponded) {
-        const allAccepted = participants?.every(p => p.status === 'accepted');
-        await supabase
-          .from('livemeet_requests')
-          .update({ 
-            status: allAccepted ? 'confirmed' : 'partial',
-            updated_at: new Date().toISOString()
-          })
-          .eq('id', requestId);
-      }
-
+      console.log('✅ LiveMeet+ request status updated:', requestId, status);
       return true;
     } catch (error) {
       console.error('❌ Failed to update LiveMeet+ status:', error);
@@ -277,11 +252,7 @@ class SupabaseRealTimeFeaturesService {
     const channel = supabase
       .channel(`livemeet-${userId}`)
       .on('postgres_changes', 
-        { event: '*', schema: 'public', table: 'livemeet_requests' },
-        () => this.getLiveMeetRequests(userId).then(callback)
-      )
-      .on('postgres_changes',
-        { event: '*', schema: 'public', table: 'livemeet_participants', filter: `participant_id=eq.${userId}` },
+        { event: '*', schema: 'public', table: 'live_meeting_requests', filter: `target_id=eq.${userId}` },
         () => this.getLiveMeetRequests(userId).then(callback)
       )
       .subscribe();
@@ -973,9 +944,9 @@ class SupabaseRealTimeFeaturesService {
 
       // Search LiveMeet+ requests
       const { data: liveMeetRequests } = await supabase
-        .from('livemeet_requests')
+        .from('live_meeting_requests')
         .select('*')
-        .or(`title.ilike.${searchTerm},description.ilike.${searchTerm},request_id.ilike.${searchTerm},submitter_name.ilike.${searchTerm}`)
+        .or(`title.ilike.${searchTerm},reason.ilike.${searchTerm},request_id.ilike.${searchTerm}`)
         .limit(15);
 
       const totalResults = 

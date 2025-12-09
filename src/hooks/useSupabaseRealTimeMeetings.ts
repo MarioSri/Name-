@@ -16,13 +16,9 @@ interface SupabaseMeeting {
   meeting_id: string;
   title: string;
   description?: string;
-  host_id: string;
-  host_user_id: string;
-  host_name: string;
-  scheduled_start?: string;
-  scheduled_end?: string;
-  actual_start?: string;
-  actual_end?: string;
+  organizer_id: string;
+  start_time?: string;
+  end_time?: string;
   status: string;
   meeting_url?: string;
   meeting_type: string;
@@ -32,16 +28,21 @@ interface SupabaseMeeting {
   updated_at: string;
 }
 
-// Supabase meeting participant record
+// Supabase meeting participant record (matches actual schema)
 interface SupabaseMeetingParticipant {
   id: string;
   meeting_id: string;
   participant_id: string;
-  participant_user_id: string;
-  participant_name: string;
-  status: string;
+  role?: string;
+  response_status?: string;
+  responded_at?: string;
+  attended?: boolean;
   joined_at?: string;
   left_at?: string;
+  notified_at?: string;
+  reminder_sent?: boolean;
+  created_at?: string;
+  updated_at?: string;
 }
 
 interface UseSupabaseRealTimeMeetingsResult {
@@ -58,20 +59,20 @@ interface UseSupabaseRealTimeMeetingsResult {
 // Convert Supabase record to Meeting type
 function toMeeting(record: SupabaseMeeting, participants: SupabaseMeetingParticipant[] = []): Meeting {
   const attendees: MeetingAttendee[] = participants.map(p => ({
-    id: p.participant_user_id,
-    name: p.participant_name,
+    id: p.participant_id,
+    name: p.participant_id, // Will be resolved from recipients table if needed
     email: '',
-    role: 'Attendee',
+    role: p.role || 'Attendee',
     department: undefined,
-    status: p.status as any,
-    responseTime: p.joined_at ? new Date(p.joined_at) : undefined,
+    status: (p.response_status || 'pending') as any,
+    responseTime: p.responded_at ? new Date(p.responded_at) : undefined,
     isRequired: true,
     canEdit: false
   }));
 
-  // Parse date and time from scheduled_start
-  const startDate = record.scheduled_start ? new Date(record.scheduled_start) : new Date();
-  const endDate = record.scheduled_end ? new Date(record.scheduled_end) : new Date(startDate.getTime() + 60 * 60 * 1000);
+  // Parse date and time from start_time
+  const startDate = record.start_time ? new Date(record.start_time) : new Date();
+  const endDate = record.end_time ? new Date(record.end_time) : new Date(startDate.getTime() + 60 * 60 * 1000);
   const durationMinutes = Math.round((endDate.getTime() - startDate.getTime()) / (1000 * 60));
 
   return {
@@ -95,7 +96,7 @@ function toMeeting(record: SupabaseMeeting, participants: SupabaseMeetingPartici
     tags: [],
     attendees,
     documents: [],
-    createdBy: record.host_name,
+    createdBy: record.organizer_id,
     createdAt: new Date(record.created_at),
     updatedAt: new Date(record.updated_at)
   };
@@ -103,21 +104,20 @@ function toMeeting(record: SupabaseMeeting, participants: SupabaseMeetingPartici
 
 // Convert Meeting to Supabase insert format
 function toSupabaseInsert(meeting: Partial<Meeting>, userId: string, userName: string): Partial<SupabaseMeeting> {
-  // Build scheduled_start from date and time
+  // Build start_time from date and time
   const dateStr = meeting.date || new Date().toISOString().split('T')[0];
   const timeStr = meeting.time || '09:00';
-  const scheduledStart = new Date(`${dateStr}T${timeStr}:00`);
+  const startTime = new Date(`${dateStr}T${timeStr}:00`);
   const durationMs = (meeting.duration || 60) * 60 * 1000;
-  const scheduledEnd = new Date(scheduledStart.getTime() + durationMs);
+  const endTime = new Date(startTime.getTime() + durationMs);
 
   return {
     meeting_id: `mtg-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
     title: meeting.title || 'Untitled Meeting',
     description: meeting.description,
-    host_user_id: userId,
-    host_name: userName,
-    scheduled_start: scheduledStart.toISOString(),
-    scheduled_end: scheduledEnd.toISOString(),
+    organizer_id: userId,
+    start_time: startTime.toISOString(),
+    end_time: endTime.toISOString(),
     meeting_type: meeting.type || 'video',
     status: meeting.status || 'scheduled',
     is_recurring: meeting.isRecurring || false,
@@ -274,7 +274,7 @@ export function useSupabaseRealTimeMeetings(): UseSupabaseRealTimeMeetingsResult
 
         if (recipientError) {
           console.warn('⚠️ Could not create host recipient:', recipientError);
-          // Continue without host_id - schema may need adjustment
+          // Continue without organizer_id - schema may need adjustment
         } else {
           hostRecipient = newRecipient;
         }
@@ -282,7 +282,7 @@ export function useSupabaseRealTimeMeetings(): UseSupabaseRealTimeMeetingsResult
 
       const insertData: any = toSupabaseInsert(meetingData, hostUserId, hostName);
       if (hostRecipient) {
-        insertData.host_id = hostRecipient.id;
+        insertData.organizer_id = hostRecipient.id;
       }
 
       const { data: newMeeting, error: insertError } = await supabase
@@ -368,17 +368,17 @@ export function useSupabaseRealTimeMeetings(): UseSupabaseRealTimeMeetingsResult
       if (updates.title !== undefined) updateData.title = updates.title;
       if (updates.description !== undefined) updateData.description = updates.description;
       
-      // Handle date/time -> scheduled_start/end conversion
+      // Handle date/time -> start_time/end_time conversion
       if (updates.date !== undefined || updates.time !== undefined || updates.duration !== undefined) {
         // Fetch existing meeting to get current values
         const { data: existing } = await supabase
           .from('meetings')
-          .select('scheduled_start, scheduled_end')
+          .select('start_time, end_time')
           .eq('id', id)
           .single();
         
-        const existingStart = existing?.scheduled_start ? new Date(existing.scheduled_start) : new Date();
-        const existingEnd = existing?.scheduled_end ? new Date(existing.scheduled_end) : new Date(existingStart.getTime() + 60 * 60 * 1000);
+        const existingStart = existing?.start_time ? new Date(existing.start_time) : new Date();
+        const existingEnd = existing?.end_time ? new Date(existing.end_time) : new Date(existingStart.getTime() + 60 * 60 * 1000);
         
         const dateStr = updates.date || existingStart.toISOString().split('T')[0];
         const timeStr = updates.time || existingStart.toTimeString().slice(0, 5);
@@ -387,8 +387,8 @@ export function useSupabaseRealTimeMeetings(): UseSupabaseRealTimeMeetingsResult
         const newStart = new Date(`${dateStr}T${timeStr}:00`);
         const newEnd = new Date(newStart.getTime() + durationMinutes * 60 * 1000);
         
-        updateData.scheduled_start = newStart.toISOString();
-        updateData.scheduled_end = newEnd.toISOString();
+        updateData.start_time = newStart.toISOString();
+        updateData.end_time = newEnd.toISOString();
       }
       
       if (updates.location !== undefined) updateData.meeting_url = updates.location;

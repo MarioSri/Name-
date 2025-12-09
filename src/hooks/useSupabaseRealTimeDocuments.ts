@@ -178,6 +178,7 @@ export function useSupabaseRealTimeDocuments(): UseSupabaseRealTimeDocumentsResu
   const subscriptionsRef = useRef<any[]>([]);
   const loadDataTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const isLoadingRef = useRef(false);
+  const hasInitialLoadRef = useRef(false);
 
   // Load initial data - SUPABASE ONLY, NO localStorage
   const loadData = useCallback(async () => {
@@ -196,8 +197,11 @@ export function useSupabaseRealTimeDocuments(): UseSupabaseRealTimeDocumentsResu
     setError(null);
 
     try {
-      // Get user's Supabase UUID for proper filtering
-      const supabaseUuid = (user as any).supabaseUuid || user.id;
+      // Get user's Supabase UUID for proper filtering - lookup from recipients table
+      const recipient = await supabaseStorage.getRecipientByUserId(user.id);
+      const supabaseUuid = recipient?.id || (user as any).supabaseUuid || user.id;
+      
+      console.log('🔍 [Supabase] Loading data for user:', user.id, '→ UUID:', supabaseUuid);
       
       // Get user's submitted documents (tracking cards)
       const docs = await supabaseStorage.getDocumentsBySubmitter(supabaseUuid);
@@ -214,15 +218,18 @@ export function useSupabaseRealTimeDocuments(): UseSupabaseRealTimeDocumentsResu
       setApprovalCards(supabaseCards);
 
       setIsConnected(true);
+      hasInitialLoadRef.current = true;
       console.log('✅ [Supabase] Loaded', supabaseDocs.length, 'documents,', supabaseCards.length, 'approval cards');
     } catch (err) {
       console.error('❌ [Supabase] Error loading data:', err);
       setError(err instanceof Error ? err.message : 'Failed to load data');
       setIsConnected(false);
       
-      // On error, set empty arrays - NO localStorage fallback
-      setTrackDocuments([]);
-      setApprovalCards([]);
+      // On error, only clear if we haven't loaded data yet
+      if (!hasInitialLoadRef.current) {
+        setTrackDocuments([]);
+        setApprovalCards([]);
+      }
     } finally {
       setLoading(false);
       isLoadingRef.current = false;
@@ -236,55 +243,100 @@ export function useSupabaseRealTimeDocuments(): UseSupabaseRealTimeDocumentsResu
     }
     loadDataTimeoutRef.current = setTimeout(() => {
       loadData();
-    }, 300); // 300ms debounce
+    }, 500); // 500ms debounce to prevent flickering
   }, [loadData]);
 
-  // Set up real-time subscriptions
+  // Store refs to avoid stale closures in subscriptions
+  const loadDataRef = useRef(loadData);
+  const debouncedLoadDataRef = useRef(debouncedLoadData);
+  
+  useEffect(() => {
+    loadDataRef.current = loadData;
+    debouncedLoadDataRef.current = debouncedLoadData;
+  }, [loadData, debouncedLoadData]);
+
+  // Set up real-time subscriptions - only depends on user.id
   useEffect(() => {
     if (!user?.id) return;
 
-    // Subscribe to documents table
-    // Note: Real-time payloads don't include joined data, so we refetch
-    const docChannel = supabaseStorage.subscribeToDocuments(user.id, (payload) => {
-      console.log('📡 [Supabase] Document change:', payload.eventType);
-      
-      // Use debounced load to prevent flickering
-      debouncedLoadData();
-    });
-
-    // Subscribe to approval cards for this user
-    // Note: Real-time payloads don't include joined data, so we refetch
-    const approvalChannel = supabaseStorage.subscribeToApprovalCards(user.id, (payload) => {
-      console.log('📡 [Supabase] Approval card change:', payload.eventType);
-      
-      // For new approvals, show a toast notification
-      if (payload.eventType === 'INSERT') {
-        const newCard = payload.new as any;
-        toast({
-          title: 'New Approval Required',
-          description: `${newCard.title || 'A document'} requires your approval`,
-          duration: 5000,
-        });
-      }
-      
-      // Use debounced load to prevent flickering
-      debouncedLoadData();
-    });
-
-    subscriptionsRef.current = [docChannel, approvalChannel];
-
+    let isMounted = true;
+    
     // Load initial data
-    loadData();
+    loadDataRef.current();
+
+    // Setup subscriptions with proper Supabase UUID lookup
+    const setupSubscriptions = async () => {
+      try {
+        // Get the Supabase UUID for the current user
+        const recipient = await supabaseStorage.getRecipientByUserId(user.id);
+        const supabaseUuid = recipient?.id || (user as any).supabaseUuid || user.id;
+        
+        if (!isMounted) return;
+
+        console.log('📡 [Supabase] Setting up realtime subscriptions for UUID:', supabaseUuid);
+
+        // Subscribe to documents table using Supabase UUID
+        // Note: Real-time payloads don't include joined data, so we refetch
+        const docChannel = supabaseStorage.subscribeToDocuments(supabaseUuid, (payload) => {
+          console.log('📡 [Supabase] Document change:', payload.eventType);
+          
+          // Use debounced load to prevent flickering
+          debouncedLoadDataRef.current();
+        });
+
+        // Subscribe to approval cards for this user using Supabase UUID
+        // Note: Real-time payloads don't include joined data, so we refetch
+        const approvalChannel = supabaseStorage.subscribeToApprovalCards(supabaseUuid, (payload) => {
+          console.log('📡 [Supabase] Approval card change:', payload.eventType);
+          
+          // For new approvals, show a toast notification
+          if (payload.eventType === 'INSERT') {
+            const newCard = payload.new as any;
+            toast({
+              title: 'New Approval Required',
+              description: `${newCard.title || 'A document'} requires your approval`,
+              duration: 5000,
+            });
+          }
+          
+          // Use debounced load to prevent flickering
+          debouncedLoadDataRef.current();
+        });
+
+        // Also subscribe to ALL approval cards to catch cards where user is in recipient list
+        // This handles parallel routing where current_approver_id may not match
+        const allApprovalChannel = supabaseStorage.subscribeToAllApprovalCards((payload) => {
+          console.log('📡 [Supabase] All approval cards change:', payload.eventType);
+          
+          // Check if this change affects the current user
+          const card = payload.new as any;
+          if (card && (card.submitted_by === supabaseUuid || 
+                       (card.recipient_ids && card.recipient_ids.includes(supabaseUuid)))) {
+            debouncedLoadDataRef.current();
+          }
+        });
+
+        subscriptionsRef.current = [docChannel, approvalChannel, allApprovalChannel];
+        setIsConnected(true);
+        console.log('✅ [Supabase] Realtime subscriptions established');
+      } catch (err) {
+        console.error('❌ [Supabase] Failed to setup subscriptions:', err);
+        setIsConnected(false);
+      }
+    };
+
+    setupSubscriptions();
 
     // Cleanup
     return () => {
+      isMounted = false;
       if (loadDataTimeoutRef.current) {
         clearTimeout(loadDataTimeoutRef.current);
       }
       subscriptionsRef.current.forEach(channel => channel?.unsubscribe?.());
       subscriptionsRef.current = [];
     };
-  }, [user?.id, loadData, debouncedLoadData, toast]);
+  }, [user?.id, toast]);
 
   // Submit a new document
   const submitDocument = useCallback(async (data: Partial<DocumentData>): Promise<DocumentData> => {
@@ -302,29 +354,55 @@ export function useSupabaseRealTimeDocuments(): UseSupabaseRealTimeDocumentsResu
       });
 
       // Get recipient details - lookup Supabase UUIDs for each recipient ID
-      const recipientDetails = await Promise.all(
-        (data.recipientIds || []).map(async (userId, index) => {
-          // Try to find the recipient in Supabase by user_id
-          const recipient = await supabaseStorage.getRecipientByUserId(userId);
-          
-          if (recipient) {
-            console.log(`✅ Found recipient in Supabase: ${userId} → ${recipient.name} (${recipient.id})`);
-            return {
-              id: recipient.id,           // Supabase UUID
-              userId: recipient.user_id,  // The user_id like "principal-001"
-              name: recipient.name,
-            };
-          } else {
-            // Recipient not in Supabase - use provided name or generate ID
-            console.warn(`⚠️ Recipient not found in Supabase: ${userId}`);
-            return {
-              id: userId,                              // Use as-is if no UUID found
-              userId: userId,
-              name: data.recipients?.[index] || userId,
-            };
-          }
-        })
-      );
+      // Only include recipients that exist in the Supabase recipients table
+      const recipientPromises = (data.recipientIds || []).map(async (userId, index) => {
+        // Try to find the recipient in Supabase by user_id
+        const recipient = await supabaseStorage.getRecipientByUserId(userId);
+        
+        if (recipient) {
+          console.log(`✅ Found recipient in Supabase: ${userId} → ${recipient.name} (${recipient.id})`);
+          return {
+            id: recipient.id,           // Supabase UUID
+            userId: recipient.user_id,  // The user_id like "principal-001"
+            name: recipient.name,
+            valid: true,
+          };
+        } else {
+          // Recipient not in Supabase - mark as invalid
+          console.warn(`⚠️ Recipient not found in Supabase: ${userId}. This recipient will be skipped.`);
+          return {
+            id: userId,
+            userId: userId,
+            name: data.recipients?.[index] || userId,
+            valid: false,
+          };
+        }
+      });
+      
+      const allRecipients = await Promise.all(recipientPromises);
+      
+      // Filter to only valid recipients (those with Supabase UUIDs)
+      const recipientDetails = allRecipients.filter(r => r.valid).map(r => ({
+        id: r.id,
+        userId: r.userId,
+        name: r.name,
+      }));
+      
+      // Log if some recipients were skipped
+      const skippedCount = allRecipients.length - recipientDetails.length;
+      if (skippedCount > 0) {
+        console.warn(`⚠️ ${skippedCount} recipient(s) not found in Supabase and were skipped`);
+        toast({
+          title: "Warning",
+          description: `${skippedCount} recipient(s) not found in database and were skipped.`,
+          variant: "destructive",
+        });
+      }
+      
+      // Require at least one valid recipient
+      if (recipientDetails.length === 0 && (data.recipientIds?.length || 0) > 0) {
+        throw new Error('No valid recipients found in database. Please ensure recipients exist in the system.');
+      }
 
       console.log('📋 Resolved recipient details:', recipientDetails);
 

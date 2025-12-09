@@ -477,13 +477,9 @@ export const FaceAuthSimple: React.FC<FaceAuthSimpleProps> = ({ onVerified, user
               <ScanFace className="w-12 h-12 text-blue-600" />
             </div>
             <h3 className="text-lg font-semibold mb-2">Face Verification</h3>
-            <p className="text-sm text-muted-foreground mb-2">
-              Secure identity check using Pinata IPFS
+            <p className="text-sm text-muted-foreground mb-6">
+              Secure identity verification system
             </p>
-            <div className="flex items-center justify-center gap-2 text-xs text-muted-foreground mb-6">
-              <Cloud className="w-4 h-4" />
-              <span>Connected to decentralized storage</span>
-            </div>
             <Button onClick={startCamera} size="lg" className="bg-blue-600 hover:bg-blue-700">
               <Camera className="w-4 h-4 mr-2" />
               Start Verification

@@ -25,12 +25,15 @@ export interface SubscriptionConfig<T> {
 class SupabaseRealtimeService {
   private channels: Map<string, RealtimeChannel> = new Map();
   private subscriptionCount = 0;
+  private connectionStatus: 'connecting' | 'connected' | 'disconnected' | 'error' = 'disconnected';
 
   /**
    * Subscribe to table changes
    */
   subscribe<T extends Record<string, any>>(config: SubscriptionConfig<T>): RealtimeSubscription {
     const channelName = `${config.table}-${++this.subscriptionCount}`;
+    
+    console.log(`📡 [Realtime] Creating subscription for ${config.table}${config.filter ? ` with filter: ${config.filter}` : ''}`);
     
     const channel = supabase
       .channel(channelName)
@@ -43,7 +46,7 @@ class SupabaseRealtimeService {
           filter: config.filter,
         },
         (payload: RealtimePostgresChangesPayload<T>) => {
-          console.log(`📡 [${config.table}] Realtime event:`, payload.eventType);
+          console.log(`📡 [${config.table}] Realtime event:`, payload.eventType, payload);
           
           if (config.onChange) {
             config.onChange(payload);
@@ -70,6 +73,20 @@ class SupabaseRealtimeService {
       )
       .subscribe((status) => {
         console.log(`📡 [${config.table}] Subscription status:`, status);
+        
+        if (status === 'SUBSCRIBED') {
+          this.connectionStatus = 'connected';
+          console.log(`✅ [${config.table}] Successfully subscribed to realtime changes`);
+        } else if (status === 'CHANNEL_ERROR') {
+          this.connectionStatus = 'error';
+          console.error(`❌ [${config.table}] Subscription error`);
+        } else if (status === 'TIMED_OUT') {
+          this.connectionStatus = 'error';
+          console.error(`❌ [${config.table}] Subscription timed out`);
+        } else if (status === 'CLOSED') {
+          this.connectionStatus = 'disconnected';
+          console.log(`⚠️ [${config.table}] Subscription closed`);
+        }
       });
 
     this.channels.set(channelName, channel);
@@ -77,6 +94,7 @@ class SupabaseRealtimeService {
     return {
       channel,
       unsubscribe: () => {
+        console.log(`📡 [Realtime] Unsubscribing from ${channelName}`);
         channel.unsubscribe();
         this.channels.delete(channelName);
       },
@@ -96,6 +114,7 @@ class SupabaseRealtimeService {
    * Unsubscribe from all channels
    */
   unsubscribeAll(): void {
+    console.log(`📡 [Realtime] Unsubscribing from all ${this.channels.size} channels`);
     this.channels.forEach((channel, name) => {
       console.log(`📡 Unsubscribing from ${name}`);
       channel.unsubscribe();
@@ -103,6 +122,19 @@ class SupabaseRealtimeService {
     this.channels.clear();
   }
 
+  /**
+   * Get connection status
+   */
+  getConnectionStatus(): string {
+    return this.connectionStatus;
+  }
+
+  /**
+   * Check if any channel is connected
+   */
+  isAnyChannelConnected(): boolean {
+    return this.connectionStatus === 'connected' && this.channels.size > 0;
+  }
   /**
    * Get active subscription count
    */

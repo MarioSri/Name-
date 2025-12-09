@@ -1038,12 +1038,7 @@ export const EmergencyWorkflowInterface: React.FC<EmergencyWorkflowInterfaceProp
                 <Clock className="w-5 h-5 text-warning" />
               </div>
               <div>
-                <p className="text-2xl font-bold text-warning">
-                  {emergencyHistory.length > 0 
-                    ? Math.round(emergencyHistory.reduce((acc, e) => acc + (e.responseTime || 0), 0) / emergencyHistory.length)
-                    : 0
-                  }m
-                </p>
+                <p className="text-2xl font-bold text-warning">0m</p>
                 <p className="text-sm text-muted-foreground">Avg Response Time</p>
               </div>
             </div>
@@ -1057,9 +1052,7 @@ export const EmergencyWorkflowInterface: React.FC<EmergencyWorkflowInterfaceProp
                 <CheckCircle2 className="w-5 h-5 text-success" />
               </div>
               <div>
-                <p className="text-2xl font-bold text-success">
-                  {emergencyHistory.filter(e => e.status === 'resolved').length}
-                </p>
+                <p className="text-2xl font-bold text-success">0</p>
                 <p className="text-sm text-muted-foreground">Resolved This Month</p>
               </div>
             </div>

@@ -78,7 +78,7 @@ const App = () => (
                   </ProtectedRoute>
                 } />
                 <Route path="/analytics" element={
-                  <ProtectedRoute requiredPermissions={['canViewAnalytics']}>
+                  <ProtectedRoute>
                     <Analytics />
                   </ProtectedRoute>
                 } />

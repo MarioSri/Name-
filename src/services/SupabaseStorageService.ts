@@ -173,13 +173,9 @@ export interface Meeting {
   meeting_id: string;
   title: string;
   description?: string;
-  host_id: string;
-  host_user_id: string;
-  host_name: string;
-  scheduled_start?: string;
-  scheduled_end?: string;
-  actual_start?: string;
-  actual_end?: string;
+  organizer_id: string;
+  start_time?: string;
+  end_time?: string;
   status: string;
   meeting_url?: string;
   meeting_type: string;
@@ -194,9 +190,10 @@ export interface MeetingParticipant {
   id: string;
   meeting_id: string;
   participant_id: string;
-  participant_user_id: string;
-  participant_name: string;
-  status: string;
+  role?: string;
+  response_status?: string;
+  responded_at?: string;
+  attended?: boolean;
   joined_at?: string;
   left_at?: string;
 }
@@ -1049,10 +1046,10 @@ class SupabaseStorageService {
         *,
         participants:meeting_participants(*)
       `)
-      .order('scheduled_start', { ascending: true });
+      .order('start_time', { ascending: true });
 
     if (userId) {
-      query = query.or(`host_user_id.eq.${userId}`);
+      query = query.or(`organizer_id.eq.${userId}`);
     }
 
     const { data, error } = await query;
@@ -1069,7 +1066,7 @@ class SupabaseStorageService {
           participants:meeting_participants(*)
         )
       `)
-      .eq('participant_user_id', userId);
+      .eq('participant_id', userId);
 
     if (error) throw error;
     return data?.map((d: any) => d.meeting).filter(Boolean) as Meeting[] || [];
@@ -1084,11 +1081,9 @@ class SupabaseStorageService {
         meeting_id: meetingId,
         title: meeting.title,
         description: meeting.description,
-        host_id: meeting.host_id,
-        host_user_id: meeting.host_user_id,
-        host_name: meeting.host_name,
-        scheduled_start: meeting.scheduled_start,
-        scheduled_end: meeting.scheduled_end,
+        organizer_id: meeting.organizer_id,
+        start_time: meeting.start_time,
+        end_time: meeting.end_time,
         status: 'scheduled',
         meeting_url: meeting.meeting_url,
         meeting_type: meeting.meeting_type || 'video',
@@ -1105,9 +1100,8 @@ class SupabaseStorageService {
       const participantRecords = participantIds.map(p => ({
         meeting_id: meetingData.id,
         participant_id: p.id,
-        participant_user_id: p.userId,
-        participant_name: p.name,
-        status: 'invited',
+        role: 'attendee',
+        response_status: 'pending',
       }));
 
       const { error: participantError } = await supabase
@@ -1271,28 +1265,33 @@ class SupabaseStorageService {
     this.channels.clear();
   }
 
-  // Subscribe to documents for a specific submitter (use created_by column)
-  subscribeToDocuments(submitterId: string, callback: ChangeCallback<Document>): RealtimeChannel {
-    return this.subscribeToTable('documents', callback, { column: 'created_by', value: submitterId });
+  // Subscribe to documents for a specific submitter (use created_by column which is UUID)
+  subscribeToDocuments(submitterUuid: string, callback: ChangeCallback<Document>): RealtimeChannel {
+    console.log(`📡 [Storage] Subscribing to documents for created_by=${submitterUuid}`);
+    return this.subscribeToTable('documents', callback, { column: 'created_by', value: submitterUuid });
   }
 
-  // Subscribe to approval cards for a specific recipient (use current_approver_id column)
-  subscribeToApprovalCards(recipientId: string, callback: ChangeCallback<ApprovalCard>): RealtimeChannel {
-    return this.subscribeToTable('approval_cards', callback, { column: 'current_approver_id', value: recipientId });
+  // Subscribe to approval cards for a specific recipient (use current_approver_id column which is UUID)
+  subscribeToApprovalCards(recipientUuid: string, callback: ChangeCallback<ApprovalCard>): RealtimeChannel {
+    console.log(`📡 [Storage] Subscribing to approval_cards for current_approver_id=${recipientUuid}`);
+    return this.subscribeToTable('approval_cards', callback, { column: 'current_approver_id', value: recipientUuid });
   }
 
-  // Subscribe to notifications for a specific user (use recipient_id column)
-  subscribeToNotifications(userId: string, callback: ChangeCallback<Notification>): RealtimeChannel {
-    return this.subscribeToTable('notifications', callback, { column: 'recipient_id', value: userId });
+  // Subscribe to notifications for a specific user (use recipient_id column which is UUID)
+  subscribeToNotifications(recipientUuid: string, callback: ChangeCallback<Notification>): RealtimeChannel {
+    console.log(`📡 [Storage] Subscribing to notifications for recipient_id=${recipientUuid}`);
+    return this.subscribeToTable('notifications', callback, { column: 'recipient_id', value: recipientUuid });
   }
 
   // Subscribe to all approval cards (for admin view)
   subscribeToAllApprovalCards(callback: ChangeCallback<ApprovalCard>): RealtimeChannel {
+    console.log(`📡 [Storage] Subscribing to ALL approval_cards`);
     return this.subscribeToTable('approval_cards', callback);
   }
 
   // Subscribe to all documents (for admin view)
   subscribeToAllDocuments(callback: ChangeCallback<Document>): RealtimeChannel {
+    console.log(`📡 [Storage] Subscribing to ALL documents`);
     return this.subscribeToTable('documents', callback);
   }
 }
