@@ -7,6 +7,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { useAuth } from '@/contexts/AuthContext';
 import { useResponsive } from '@/hooks/useResponsive';
 import { cn } from '@/lib/utils';
+import { supabase } from '@/integrations/supabase/client';
 import {
   StickyNote,
   Plus,
@@ -90,59 +91,150 @@ export const StickyNotesWidget: React.FC<StickyNotesWidgetProps> = ({
   const categories = ['general', 'meetings', 'documents', 'reminders', 'ideas', 'tasks'];
 
   useEffect(() => {
-    // Load notes from localStorage
-    const savedNotes = localStorage.getItem(`sticky-notes-${user?.id}`);
-    if (savedNotes) {
-      setNotes(JSON.parse(savedNotes));
-    } else {
-      // Default notes for demonstration
-      const defaultNotes: StickyNoteData[] = [
-        {
-          id: '1',
-          title: 'Faculty Meeting Follow-up',
-          content: 'Review new curriculum proposals and schedule next review meeting with department heads',
-          color: 'bg-yellow-200',
-          position: { x: 10, y: 10 },
-          createdAt: '2024-01-15',
-          category: 'meetings',
-          pinned: true,
-          reminder: {
-            date: '2024-01-18',
-            time: '09:00',
-            enabled: true
-          }
-        },
-        {
-          id: '2',
-          title: 'Budget Review',
-          content: 'Check Q1 budget allocations and submit variance report to finance committee',
-          color: 'bg-blue-200',
-          position: { x: 220, y: 30 },
-          createdAt: '2024-01-14',
-          category: 'documents',
-          pinned: false
-        },
-        {
-          id: '3',
-          title: 'Student Evaluation',
-          content: 'Complete mid-semester evaluation forms for all assigned courses',
-          color: 'bg-green-200',
-          position: { x: 10, y: 150 },
-          createdAt: '2024-01-13',
-          category: 'tasks',
-          pinned: false
+    // Load notes from Supabase
+    const loadNotes = async () => {
+      if (!user?.id) return;
+      
+      const { data, error } = await supabase
+        .from('sticky_notes')
+        .select('*')
+        .eq('user_id', user.id)
+        .order('pinned', { ascending: false })
+        .order('created_at', { ascending: false });
+      
+      if (error) {
+        console.error('Error loading sticky notes:', error);
+        // Fall back to default notes
+        setNotes(getDefaultNotes());
+        return;
+      }
+      
+      if (data && data.length > 0) {
+        setNotes(data.map(note => ({
+          id: note.id,
+          title: note.title,
+          content: note.content,
+          color: note.color,
+          position: note.position || { x: 10, y: 10 },
+          createdAt: note.created_at,
+          category: note.category,
+          pinned: note.pinned,
+          reminder: note.reminder
+        })));
+      } else {
+        // Default notes for new users
+        const defaultNotes = getDefaultNotes();
+        setNotes(defaultNotes);
+        // Save default notes to Supabase
+        for (const note of defaultNotes) {
+          await supabase.from('sticky_notes').insert({
+            id: note.id,
+            user_id: user.id,
+            title: note.title,
+            content: note.content,
+            color: note.color,
+            position: note.position,
+            category: note.category,
+            pinned: note.pinned,
+            reminder: note.reminder
+          });
         }
-      ];
-      setNotes(defaultNotes);
-    }
+      }
+    };
+    
+    const getDefaultNotes = (): StickyNoteData[] => [
+      {
+        id: '1',
+        title: 'Faculty Meeting Follow-up',
+        content: 'Review new curriculum proposals and schedule next review meeting with department heads',
+        color: 'bg-yellow-200',
+        position: { x: 10, y: 10 },
+        createdAt: '2024-01-15',
+        category: 'meetings',
+        pinned: true,
+        reminder: {
+          date: '2024-01-18',
+          time: '09:00',
+          enabled: true
+        }
+      },
+      {
+        id: '2',
+        title: 'Budget Review',
+        content: 'Check Q1 budget allocations and submit variance report to finance committee',
+        color: 'bg-blue-200',
+        position: { x: 220, y: 30 },
+        createdAt: '2024-01-14',
+        category: 'documents',
+        pinned: false
+      },
+      {
+        id: '3',
+        title: 'Student Evaluation',
+        content: 'Complete mid-semester evaluation forms for all assigned courses',
+        color: 'bg-green-200',
+        position: { x: 10, y: 150 },
+        createdAt: '2024-01-13',
+        category: 'tasks',
+        pinned: false
+      }
+    ];
+    
+    loadNotes();
+    
+    // Subscribe to real-time changes
+    const channel = supabase
+      .channel('sticky_notes_changes')
+      .on('postgres_changes', 
+        { event: '*', schema: 'public', table: 'sticky_notes', filter: `user_id=eq.${user?.id}` },
+        () => { loadNotes(); }
+      )
+      .subscribe();
+    
+    return () => {
+      supabase.removeChannel(channel);
+    };
   }, [user]);
 
-  const saveNotes = (updatedNotes: StickyNoteData[]) => {
+  const saveNotes = async (updatedNotes: StickyNoteData[]) => {
     setNotes(updatedNotes);
-    localStorage.setItem(`sticky-notes-${user?.id}`, JSON.stringify(updatedNotes));
+    // Sync with Supabase happens via real-time subscription
+  };
+  
+  const saveNoteToSupabase = async (note: StickyNoteData) => {
+    if (!user?.id) return;
+    
+    const { error } = await supabase
+      .from('sticky_notes')
+      .upsert({
+        id: note.id,
+        user_id: user.id,
+        title: note.title,
+        content: note.content,
+        color: note.color,
+        position: note.position,
+        category: note.category,
+        pinned: note.pinned,
+        reminder: note.reminder
+      });
+    
+    if (error) {
+      console.error('Error saving sticky note:', error);
+    }
+  };
+  
+  const deleteNoteFromSupabase = async (noteId: string) => {
+    const { error } = await supabase
+      .from('sticky_notes')
+      .delete()
+      .eq('id', noteId);
+    
+    if (error) {
+      console.error('Error deleting sticky note:', error);
+    }
   };
 
-  const addNote = () => {
+  const addNote = async () => {
     if (!newNote.title.trim()) return;
 
     const note: StickyNoteData = {
@@ -156,12 +248,14 @@ export const StickyNotesWidget: React.FC<StickyNotesWidgetProps> = ({
       pinned: false
     };
     
-    saveNotes([...notes, note]);
+    setNotes([...notes, note]);
+    await saveNoteToSupabase(note);
     setNewNote({ title: '', content: '', color: 'bg-yellow-200', category: 'general' });
   };
 
-  const deleteNote = (id: string) => {
-    saveNotes(notes.filter(note => note.id !== id));
+  const deleteNote = async (id: string) => {
+    setNotes(notes.filter(note => note.id !== id));
+    await deleteNoteFromSupabase(id);
   };
 
   // Drag functionality

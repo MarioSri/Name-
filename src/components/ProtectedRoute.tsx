@@ -13,16 +13,18 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({
   requiredPermissions = [] 
 }) => {
   const { user, isAuthenticated, isLoading } = useAuth();
+  const location = useLocation();
 
-  if (isLoading) {
+  // Check if this is an OAuth callback - don't redirect during callback processing
+  const isOAuthCallback = location.hash.includes('access_token') || location.search.includes('code=');
+
+  if (isLoading || isOAuthCallback) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gradient-subtle">
         <HITAMTreeLoading size="lg" />
       </div>
     );
   }
-
-  const location = useLocation();
 
   if (!isAuthenticated || !user) {
     // User not authenticated - redirect to login

@@ -51,57 +51,21 @@ export const DynamicDashboard: React.FC<DynamicDashboardProps> = ({ className })
       const config = getDashboardConfig(user.role, user.department, user.branch);
       setDashboardConfig(config);
       
-      // FORCE RESET for principal role to ensure Quick Actions appears
-      if (user.role === 'principal') {
-        localStorage.removeItem(`dashboard-widgets-${user.role}`);
-        console.log('Principal dashboard reset - Quick Actions will appear');
-      }
-      
       // Define disallowed widgets for specific roles
       const disallowedWidgetsForRole = user.role && ['employee', 'registrar', 'program-head', 'hod', 'principal'].includes(user.role)
         ? ['analytics']
         : [];
       
-      // Clean up any invalid widgets from localStorage
-      const savedWidgets = localStorage.getItem(`dashboard-widgets-${user.role}`);
-      if (savedWidgets) {
-        try {
-          const parsed = JSON.parse(savedWidgets);
-          // Filter out unsupported widget types and disallowed widgets for role
-          let validWidgets = parsed.filter((widget: DashboardWidget) => 
-            supportedWidgetTypes.includes(widget.type) && 
-            !disallowedWidgetsForRole.includes(widget.type)
-          );
-          
-          // CRITICAL FIX: Ensure Quick Actions widget is always present for all roles
-          const hasQuickActions = validWidgets.some((w: DashboardWidget) => w.type === 'quickActions');
-          if (!hasQuickActions) {
-            console.log('Quick Actions widget missing - adding it back');
-            validWidgets.unshift({
-              id: 'quickActions',
-              type: 'quickActions',
-              title: 'Quick Actions',
-              position: { x: 0, y: 0, w: isMobile ? 12 : 6, h: 2 },
-              visible: true,
-              permissions: []
-            });
-          }
-          
-          // If we filtered out invalid widgets or added Quick Actions, save the cleaned version
-          if (validWidgets.length !== parsed.length || !hasQuickActions) {
-            localStorage.setItem(`dashboard-widgets-${user.role}`, JSON.stringify(validWidgets));
-          }
-          
-          setWidgets(validWidgets.length > 0 ? validWidgets : getDefaultWidgets(config));
-        } catch (error) {
-          console.error('Error parsing saved widgets:', error);
-          // Clear corrupted data and use defaults
-          localStorage.removeItem(`dashboard-widgets-${user.role}`);
-          setWidgets(getDefaultWidgets(config));
-        }
-      } else {
-        setWidgets(getDefaultWidgets(config));
-      }
+      // Use default widgets directly - no localStorage
+      const defaultWidgets = getDefaultWidgets(config);
+      
+      // Filter out disallowed widgets
+      const validWidgets = defaultWidgets.filter((widget: DashboardWidget) => 
+        supportedWidgetTypes.includes(widget.type) && 
+        !disallowedWidgetsForRole.includes(widget.type)
+      );
+      
+      setWidgets(validWidgets);
     }
   }, [user]);
 
@@ -245,7 +209,8 @@ export const DynamicDashboard: React.FC<DynamicDashboardProps> = ({ className })
 
   const saveLayout = () => {
     if (user) {
-      localStorage.setItem(`dashboard-widgets-${user.role}`, JSON.stringify(widgets));
+      // Widget configuration is kept in component state, not localStorage
+      // This allows customization within the session but resets to defaults on refresh
       setIsCustomizing(false);
       setSelectedWidget(null);
     }

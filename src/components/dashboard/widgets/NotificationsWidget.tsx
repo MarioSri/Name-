@@ -4,8 +4,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { useAuth } from '@/contexts/AuthContext';
-import { useSocket } from '@/hooks/useSocket';
-import { apiService } from '@/services/api';
+import { supabase } from '@/lib/supabase';
 import { cn } from '@/lib/utils';
 
 // Simple responsive hook
@@ -61,11 +60,11 @@ export const NotificationsWidget: React.FC<NotificationsWidgetProps> = ({
   isSelected
 }) => {
   const { user } = useAuth();
-  const { onNotification } = useSocket();
   const { isMobile } = useResponsive();
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [filter, setFilter] = useState<'all' | 'unread' | 'urgent'>('all');
   const [unreadCount, setUnreadCount] = useState(0);
+  const [loading, setLoading] = useState(true);
 
   const getNotificationIcon = (type: string) => {
     switch (type) {
@@ -79,36 +78,111 @@ export const NotificationsWidget: React.FC<NotificationsWidgetProps> = ({
   };
 
   useEffect(() => {
+    if (!user) return;
+    
     loadNotifications();
     
-    const unsubscribe = onNotification((notification) => {
-      setNotifications(prev => [notification, ...prev]);
-      setUnreadCount(prev => prev + 1);
-    });
+    // Subscribe to real-time notification updates
+    const channel = supabase
+      .channel('notifications-realtime')
+      .on(
+        'postgres_changes',
+        { 
+          event: 'INSERT', 
+          schema: 'public', 
+          table: 'notifications',
+          filter: `recipient_id=eq.${user.supabaseUuid}`
+        },
+        (payload) => {
+          console.log('📢 [Notifications] New notification:', payload.new);
+          const newNotification = payload.new as any;
+          setNotifications(prev => [{
+            id: newNotification.id,
+            title: newNotification.title,
+            message: newNotification.message,
+            type: newNotification.type,
+            created_at: newNotification.created_at,
+            delivered_via: newNotification.delivered_via || ['app'],
+            read: newNotification.read || false,
+            urgent: newNotification.urgent || newNotification.type === 'emergency'
+          }, ...prev]);
+          setUnreadCount(prev => prev + 1);
+        }
+      )
+      .subscribe();
 
-    return unsubscribe;
-  }, []);
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [user]);
 
   const loadNotifications = async () => {
+    if (!user) return;
+    
+    setLoading(true);
     try {
-      const response = await apiService.getUserNotifications();
-      if (response.success) {
-        setNotifications(response.data);
-        setUnreadCount(response.data.filter((n: any) => !n.read).length);
+      // Fetch notifications from Supabase
+      const { data, error } = await supabase
+        .from('notifications')
+        .select('*')
+        .eq('recipient_id', user.supabaseUuid)
+        .order('created_at', { ascending: false })
+        .limit(50);
+      
+      if (error) {
+        console.error('Failed to load notifications from Supabase:', error);
+        setNotifications([]);
+        setUnreadCount(0);
+        return;
       }
+      
+      const formattedNotifications: Notification[] = (data || []).map((n: any) => ({
+        id: n.id,
+        title: n.title,
+        message: n.message,
+        type: n.type,
+        created_at: n.created_at,
+        delivered_via: n.delivered_via || ['app'],
+        read: n.read || false,
+        urgent: n.urgent || n.type === 'emergency'
+      }));
+      
+      setNotifications(formattedNotifications);
+      setUnreadCount(formattedNotifications.filter(n => !n.read).length);
+      console.log(`✅ [Notifications] Loaded ${formattedNotifications.length} notifications from Supabase`);
     } catch (error) {
       console.error('Failed to load notifications:', error);
+      setNotifications([]);
+      setUnreadCount(0);
+    } finally {
+      setLoading(false);
     }
   };
 
-  const markAsRead = (id: string) => {
+  const markAsRead = async (id: string) => {
+    // Update in Supabase
+    if (user?.supabaseUuid) {
+      await supabase
+        .from('notifications')
+        .update({ read: true })
+        .eq('id', id);
+    }
+    
     setNotifications(prev => 
       prev.map(n => n.id === id ? { ...n, read: true } : n)
     );
     setUnreadCount(prev => Math.max(0, prev - 1));
   };
 
-  const removeNotification = (id: string) => {
+  const removeNotification = async (id: string) => {
+    // Delete from Supabase
+    if (user?.supabaseUuid) {
+      await supabase
+        .from('notifications')
+        .delete()
+        .eq('id', id);
+    }
+    
     setNotifications(prev => prev.filter(n => n.id !== id));
   };
 

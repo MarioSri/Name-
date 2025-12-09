@@ -6,7 +6,7 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
 import { useResponsive } from '@/hooks/useResponsive';
 import { cn } from '@/lib/utils';
-import { filterMeetingsByRecipient, loadMeetingsFromStorage } from '@/utils/meetingFilters';
+import { supabase } from '@/lib/supabase';
 import { Meeting, MeetingAttendee } from '@/types/meeting';
 import {
   Calendar as CalendarIcon,
@@ -95,118 +95,102 @@ export const CalendarWidget: React.FC<CalendarWidgetProps> = ({
       return;
     }
 
-    // Simulate API call to fetch meetings
+    // Fetch meetings from Supabase
     const fetchMeetings = async () => {
       setLoading(true);
-      console.log('[Calendar Widget] 🔄 Fetching meetings for user:', user.name);
+      console.log('[Calendar Widget] 🔄 Fetching meetings from Supabase for user:', user.name);
       
-      // Load real recipients for mock meetings
-      const { supabaseWorkflowService } = await import('@/services/SupabaseWorkflowService');
-      const recipients = await supabaseWorkflowService.getRecipients();
-      
-      // Create mock meetings with real recipients
-      const mockMeetings = recipients.length > 0 && userRole === 'principal' ? [
-        {
-          id: '1',
-          title: 'Faculty Recruitment Review',
-          description: 'Review applications for new CSE faculty positions',
-          date: '2024-01-18',
-          time: '10:00 AM',
-          duration: 90,
-          attendees: recipients.slice(0, 4).map(r => ({
-            id: r.user_id,
-            name: r.name,
-            email: r.email,
-            role: r.role,
-            department: r.department,
-            status: 'accepted' as const,
-            isRequired: true,
-            canEdit: false
-          })),
-          location: 'Conference Room A',
-          type: 'online' as const,
-          status: 'confirmed' as const,
-          priority: 'high' as const,
-          createdBy: 'principal-001',
-          category: 'recruitment' as const,
-          isRecurring: false,
-          tags: [],
-          department: 'Administration',
-          documents: [],
-          createdAt: new Date('2024-01-15T09:00:00Z'),
-          updatedAt: new Date('2024-01-16T14:30:00Z')
-        },
-        {
-          id: '2',
-          title: 'Emergency Infrastructure Meeting',
-          description: 'Urgent discussion about Block A electrical issues',
-          date: '2024-01-17',
-          time: '2:00 PM',
-          duration: 60,
-          attendees: recipients.slice(0, 4).map(r => ({
-            id: r.user_id,
-            name: r.name,
-            email: r.email,
-            role: r.role,
-            department: r.department,
-            status: 'accepted' as const,
-            isRequired: true,
-            canEdit: false
-          })),
-          location: 'Principal Office',
-          type: 'online' as const,
-          status: 'confirmed' as const,
-          priority: 'urgent' as const,
-          createdBy: 'principal-001',
-          category: 'emergency' as const,
-          isRecurring: false,
-          tags: [],
-          department: 'Administration',
-          documents: [],
-          createdAt: new Date('2024-01-16T08:00:00Z'),
-          updatedAt: new Date('2024-01-16T08:00:00Z')
-        }
-      ] as Meeting[] : [];
-
       try {
-        const storedMeetings = loadMeetingsFromStorage();
-        console.log(`[Calendar Widget] Loaded ${storedMeetings.length} meetings from localStorage`);
+        // Fetch meetings from Supabase where user is host or attendee
+        const { data: meetingsData, error } = await supabase
+          .from('meetings')
+          .select(`
+            *,
+            host:recipients!meetings_host_id_fkey(name, email, role),
+            meeting_attendees(
+              recipient:recipients(id, user_id, name, email, role, department),
+              status,
+              is_required
+            )
+          `)
+          .or(`host_id.eq.${user.supabaseUuid},meeting_attendees.recipient_id.eq.${user.supabaseUuid}`)
+          .gte('date', new Date().toISOString().split('T')[0])
+          .order('date', { ascending: true });
         
-        const allMeetings = [...storedMeetings, ...mockMeetings];
-        const uniqueMeetings = allMeetings.filter((meeting, index, self) =>
-          index === self.findIndex((m) => m.id === meeting.id)
-        );
-        
-        const filteredMeetings = filterMeetingsByRecipient(uniqueMeetings, user);
-        
-        console.log(`[Calendar Widget] ✅ Total meetings: ${uniqueMeetings.length}, Filtered for user: ${filteredMeetings.length}`);
-
-        setTimeout(() => {
-          setMeetings(filteredMeetings);
+        if (error) {
+          console.error('[Calendar Widget] ❌ Supabase error:', error);
+          setMeetings([]);
           setLoading(false);
-        }, 600);
+          return;
+        }
+        
+        // Transform to Meeting format
+        const transformedMeetings: Meeting[] = (meetingsData || []).map((m: any) => ({
+          id: m.id,
+          title: m.title,
+          description: m.description,
+          date: m.date,
+          time: m.start_time,
+          duration: m.duration || 60,
+          attendees: (m.meeting_attendees || []).map((a: any) => ({
+            id: a.recipient?.user_id || a.recipient?.id,
+            name: a.recipient?.name,
+            email: a.recipient?.email,
+            role: a.recipient?.role,
+            department: a.recipient?.department,
+            status: a.status || 'pending',
+            isRequired: a.is_required
+          })),
+          location: m.location,
+          type: m.type || 'online',
+          status: m.status || 'scheduled',
+          priority: m.priority || 'medium',
+          createdBy: m.host_id,
+          category: m.category || 'general',
+          isRecurring: m.is_recurring || false,
+          tags: m.tags || [],
+          department: m.department,
+          documents: m.documents || [],
+          meetingLinks: m.meeting_links,
+          createdAt: new Date(m.created_at),
+          updatedAt: new Date(m.updated_at)
+        }));
+        
+        console.log(`[Calendar Widget] ✅ Loaded ${transformedMeetings.length} meetings from Supabase`);
+        setMeetings(transformedMeetings);
       } catch (error) {
         console.error('[Calendar Widget] ❌ Error loading meetings:', error);
-        const filteredMockMeetings = filterMeetingsByRecipient(mockMeetings, user);
-        setMeetings(filteredMockMeetings);
+        setMeetings([]);
+      } finally {
         setLoading(false);
       }
     };
 
     fetchMeetings();
     
-    // Listen for storage events (from MeetingScheduler)
-    const handleStorageChange = () => {
-      console.log('[Calendar Widget] Storage event detected - reloading meetings');
-      fetchMeetings();
-    };
-    
-    window.addEventListener('meetings-updated', handleStorageChange);
-    window.addEventListener('storage', handleStorageChange);
+    // Subscribe to real-time meeting updates
+    const channel = supabase
+      .channel('calendar-meetings')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'meetings' },
+        (payload) => {
+          console.log('[Calendar Widget] Real-time meeting update:', payload.eventType);
+          fetchMeetings();
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'meeting_attendees' },
+        (payload) => {
+          console.log('[Calendar Widget] Real-time attendee update:', payload.eventType);
+          fetchMeetings();
+        }
+      )
+      .subscribe();
     
     return () => {
-      window.removeEventListener('meetings-updated', handleStorageChange);
-      window.removeEventListener('storage', handleStorageChange);
+      supabase.removeChannel(channel);
     };
   }, [user]);
 

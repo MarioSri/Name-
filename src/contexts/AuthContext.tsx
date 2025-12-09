@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import { supabase } from '@/lib/supabase';
 import { supabaseWorkflowService } from '@/services/SupabaseWorkflowService';
+import { toast } from 'sonner';
 
 export interface User {
   id: string;          // user_id from recipients table (e.g., "principal-001")
@@ -115,8 +116,20 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     return null;
   });
   
+  // Check if this is an OAuth callback (has hash or code in URL)
+  const isOAuthCallback = () => {
+    const hash = window.location.hash;
+    const search = window.location.search;
+    return hash.includes('access_token') || search.includes('code=');
+  };
+  
   // If user was loaded from sessionStorage, don't show loading state
+  // BUT if this is an OAuth callback, always show loading until callback completes
   const [isLoading, setIsLoading] = useState(() => {
+    if (isOAuthCallback()) {
+      console.log('🔐 OAuth callback detected, showing loading...');
+      return true; // Always loading during OAuth callback
+    }
     const savedUser = sessionStorage.getItem('iaoms-user');
     return !savedUser; // Only loading if no saved user
   });
@@ -395,18 +408,26 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
             await supabase.auth.signOut();
             setUser(null);
             sessionStorage.removeItem('iaoms-user');
-            // Show error - would need a toast or error state
-            alert(`Access Denied: ${googleUser.email} is not registered in the institutional system. Please contact the administrator.`);
+            toast.error('Access Denied', {
+              description: `${googleUser.email} is not registered in the institutional system. Please contact the administrator.`,
+              duration: 8000,
+            });
             setIsLoading(false);
             return;
           }
           
           // Update google_id if not set (first time Google login for existing user)
           if (!recipient.google_id) {
-            await supabaseWorkflowService.updateRecipient(recipient.email, {
-              google_id: googleUser.id,
-              avatar: recipient.avatar || googleUser.user_metadata?.avatar_url,
-            });
+            try {
+              await supabaseWorkflowService.updateRecipient(recipient.email, {
+                google_id: googleUser.id,
+                avatar: recipient.avatar || googleUser.user_metadata?.avatar_url,
+              });
+              console.log('✅ Updated recipient with Google ID');
+            } catch (updateError) {
+              // Don't fail login if update fails - just log it
+              console.warn('⚠️ Could not update recipient google_id (RLS policy may need update):', updateError);
+            }
           }
           
           // Use role from recipient (ignore pending role - use institutional role)
@@ -428,8 +449,20 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
           sessionStorage.setItem('iaoms-user', JSON.stringify(authenticatedUser));
           console.log('✅ Google user authenticated:', authenticatedUser.name, 'Role:', authenticatedUser.role);
           
-        } catch (error) {
+          // Show success toast
+          toast.success('Login Successful!', {
+            description: `Welcome, ${authenticatedUser.name}!`,
+          });
+          
+        } catch (error: any) {
           console.error('Failed to process Google login:', error);
+          // Sign out on error and show toast
+          await supabase.auth.signOut();
+          setUser(null);
+          sessionStorage.removeItem('iaoms-user');
+          toast.error('Login Failed', {
+            description: error?.message || 'Failed to authenticate. Please try again.',
+          });
         }
       } else if (event === 'SIGNED_OUT') {
         setUser(null);
@@ -437,21 +470,63 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       }
       
       setIsLoading(false);
-    });
-
-    // Check initial session - only set loading to false if no saved user
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      const hasSavedUser = sessionStorage.getItem('iaoms-user');
-      if (!session && !hasSavedUser) {
-        setIsLoading(false);
-      } else if (hasSavedUser && !session) {
-        // User was loaded from sessionStorage, not from Supabase OAuth
-        // isLoading is already false from initialization
-        setIsLoading(false);
+      
+      // Clear OAuth hash from URL after processing
+      if (window.location.hash.includes('access_token')) {
+        window.history.replaceState(null, '', window.location.pathname);
       }
     });
 
-    return () => subscription.unsubscribe();
+    // Check initial session - only set loading to false if no saved user AND not OAuth callback
+    const checkSession = async () => {
+      try {
+        const hasSavedUser = sessionStorage.getItem('iaoms-user');
+        const isCallback = window.location.hash.includes('access_token') || window.location.search.includes('code=');
+        
+        if (isCallback) {
+          // Don't change loading state - let onAuthStateChange handle it
+          console.log('🔐 OAuth callback in progress, waiting for auth state change...');
+          
+          // Safety timeout - if OAuth callback takes too long, stop loading
+          setTimeout(() => {
+            setIsLoading(false);
+            console.warn('⚠️ OAuth callback timeout - showing login page');
+          }, 10000); // 10 second timeout
+          return;
+        }
+        
+        const { data: { session } } = await supabase.auth.getSession();
+        
+        if (!session && !hasSavedUser) {
+          setIsLoading(false);
+        } else if (hasSavedUser && !session) {
+          // User was loaded from sessionStorage, not from Supabase OAuth
+          setIsLoading(false);
+        }
+      } catch (error) {
+        console.error('❌ Failed to check session:', error);
+        // On error, stop loading and show login page
+        setIsLoading(false);
+      }
+    };
+    
+    checkSession();
+    
+    // Safety timeout - ensure loading never gets stuck forever
+    const safetyTimeout = setTimeout(() => {
+      setIsLoading(prevLoading => {
+        if (prevLoading) {
+          console.warn('⚠️ Loading timeout - forcing login page display');
+          return false;
+        }
+        return prevLoading;
+      });
+    }, 5000); // 5 second max loading time
+
+    return () => {
+      subscription.unsubscribe();
+      clearTimeout(safetyTimeout);
+    };
   }, []);
 
   // Clean up any old localStorage sessions on mount

@@ -8,6 +8,8 @@ import { useAuth } from '@/contexts/AuthContext';
 import { useResponsive } from '@/hooks/useResponsive';
 import { cn } from '@/lib/utils';
 import { AISummarizerModal } from '@/components/AISummarizerModal';
+import { supabase } from '@/lib/supabase';
+import { supabaseWorkflowService } from '@/services/SupabaseWorkflowService';
 import {
   FileText,
   Clock,
@@ -138,7 +140,7 @@ export const DocumentsWidget: React.FC<DocumentsWidgetProps> = ({
   }, [user]);
 
   useEffect(() => {
-    // Load Pending Approvals from Approval Center with debouncing
+    // Load Pending Documents from Supabase
     const fetchDocuments = async () => {
       // Prevent concurrent fetches
       if (isFetchingRef.current) {
@@ -147,202 +149,69 @@ export const DocumentsWidget: React.FC<DocumentsWidgetProps> = ({
       }
       
       isFetchingRef.current = true;
+      setLoading(true);
       
-      // Only show pending approvals for non-employee roles
-      let allPendingDocs: Document[] = [];
-      
-      if (userRole !== 'employee') {
-        // Get pending approvals from localStorage and static data
-        const storedApprovals = JSON.parse(localStorage.getItem('pending-approvals') || '[]');
+      try {
+        // Fetch documents from Supabase where user is a recipient
+        const pendingDocs = await supabaseWorkflowService.getApprovalCards(user?.id || user?.email);
         
-        console.log('📥 [Dashboard] Loading approval cards from localStorage:', storedApprovals.length);
+        console.log('📥 [Dashboard] Loaded approval cards from Supabase:', pendingDocs.length);
         
-        // Filter approval cards for current user
-        const userApprovalCards = storedApprovals.filter((approval: any) => {
-          return isUserInRecipients(approval);
-        });
-        
-        console.log('✅ [Dashboard] User-specific approval cards:', userApprovalCards.length);
-        
-        // Convert approval cards to document format
-        const approvalDocuments: Document[] = userApprovalCards.map((approval: any) => ({
-          id: approval.id,
-          title: approval.title,
-          type: approval.type,
-          status: approval.status || 'pending',
-          submittedBy: approval.submitter,
-          submittedByRole: 'Faculty',
-          department: approval.department || 'General',
-          date: approval.submittedDate,
-          priority: approval.isEmergency ? 'emergency' : (approval.priority || 'medium'),
-          description: approval.description,
-          requiresAction: true,
-          escalationLevel: 0,
-          approvalCard: approval  // Store original approval card
+        // Convert to Document format
+        const documents: Document[] = pendingDocs.map((doc: any) => ({
+          id: doc.id,
+          title: doc.title,
+          type: doc.type || 'Letter',
+          status: doc.status || 'pending',
+          submittedBy: doc.submitter_name || doc.submitter || 'Unknown',
+          submittedByRole: doc.submitter_role || 'Faculty',
+          department: doc.department || 'General',
+          date: doc.created_at ? new Date(doc.created_at).toISOString().split('T')[0] : new Date().toISOString().split('T')[0],
+          priority: doc.is_emergency ? 'emergency' : (doc.priority || 'medium'),
+          description: doc.description || '',
+          requiresAction: doc.status === 'pending',
+          escalationLevel: doc.escalation_level || 0,
+          approvalCard: doc
         }));
         
-        // Only show static mock data for Principal role
-        const staticPendingDocs = userRole === 'principal' ? [
-          {
-            id: 'faculty-meeting',
-            title: 'Faculty Meeting Minutes – Q4 2024',
-            type: 'Circular' as const,
-            status: 'pending' as const,
-            submittedBy: 'Dr. Sarah Johnson',
-            submittedByRole: 'Faculty',
-            department: 'Academic Affairs',
-            date: '2024-01-15',
-            priority: 'high' as const,
-            description: 'Add a risk-mitigation section to highlight potential delays or issues.',
-            requiresAction: true,
-            escalationLevel: 0
-          },
-          {
-            id: 'budget-request',
-            title: 'Budget Request – Lab Equipment',
-            type: 'Letter' as const,
-            status: 'pending' as const,
-            submittedBy: 'Prof. David Brown',
-            submittedByRole: 'Professor',
-            department: 'Engineering',
-            date: '2024-01-13',
-            priority: 'medium' as const,
-            description: 'Consider revising the scope to focus on priority items within this quarter\'s budget.',
-            requiresAction: true,
-            escalationLevel: 0
-          },
-          {
-            id: 'student-event',
-            title: 'Student Event Proposal – Tech Fest 2024',
-            type: 'Circular' as const,
-            status: 'emergency' as const,
-            submittedBy: 'Dr. Emily Davis',
-            submittedByRole: 'Faculty',
-            department: 'Student Affairs',
-            date: '2024-01-14',
-            priority: 'emergency' as const,
-            description: 'Annual technology festival proposal including budget allocation, venue requirements, and guest speaker arrangements.',
-            requiresAction: true,
-            escalationLevel: 2
-          },
-          {
-            id: 'research-methodology',
-            title: 'Research Methodology Guidelines – Academic Review',
-            type: 'Report' as const,
-            status: 'pending' as const,
-            submittedBy: 'Prof. Jessica Chen',
-            submittedByRole: 'Professor',
-            department: 'Research',
-            date: '2024-01-20',
-            priority: 'medium' as const,
-            description: 'Comprehensive guidelines for research methodology standards and academic review processes.',
-            requiresAction: true,
-            escalationLevel: 0
-          }
-        ] : [];
-        
-        // Combine stored and static documents, then filter by recipient visibility
-        allPendingDocs = [...approvalDocuments, ...staticPendingDocs];
+        setDocuments(documents);
+        console.log('✅ [Dashboard] User-specific documents:', documents.length);
+      } catch (error) {
+        console.error('❌ [Dashboard] Error fetching documents from Supabase:', error);
+        setDocuments([]);
+      } finally {
+        setLoading(false);
+        isFetchingRef.current = false;
       }
-
-      // Update state and release lock
-      setDocuments(allPendingDocs);
-      setLoading(false);
-      isFetchingRef.current = false;
-    };
-    
-    // Debounced fetch function
-    const debouncedFetch = () => {
-      if (fetchTimeoutRef.current) {
-        clearTimeout(fetchTimeoutRef.current);
-      }
-      fetchTimeoutRef.current = setTimeout(() => {
-        fetchDocuments();
-      }, 300);
     };
 
-    fetchDocuments();
+    if (user) {
+      fetchDocuments();
+    }
     
-    // NEW: Listen for approval card creation events
-    const handleApprovalCardCreated = (event: any) => {
-      console.log('📢 [Dashboard] Approval card event received:', event.type);
-      const approval = event.detail?.approval;
-      
-      if (approval) {
-        console.log('📋 [Dashboard] New approval card:', {
-          id: approval.id,
-          title: approval.title,
-          isEmergency: approval.isEmergency,
-          recipients: approval.recipients
-        });
-        
-        // Check if current user is a recipient
-        if (isUserInRecipients(approval)) {
-          // Convert approval card to document format
-          const newDocument: Document = {
-            id: approval.id,
-            title: approval.title,
-            type: approval.type as any,
-            status: approval.status || 'pending',
-            submittedBy: approval.submitter,
-            submittedByRole: 'Faculty',
-            department: approval.department || 'General',
-            date: approval.submittedDate,
-            priority: approval.isEmergency ? 'emergency' : (approval.priority || 'medium'),
-            description: approval.description,
-            requiresAction: true,
-            escalationLevel: 0,
-            approvalCard: approval  // Store original approval card for reference
-          };
-          
-          // Add to documents state (avoid duplicates)
-          setDocuments(prev => {
-            const exists = prev.some(doc => doc.id === newDocument.id);
-            if (exists) {
-              console.log('⚠️ [Dashboard] Approval card already exists, skipping');
-              return prev;
-            }
-            console.log('✅ [Dashboard] Adding approval card to Recent Documents');
-            return [newDocument, ...prev];
-          });
+    // Subscribe to real-time updates from Supabase
+    const channel = supabase
+      .channel('dashboard-documents')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'document_recipients' },
+        (payload) => {
+          console.log('📢 [Dashboard] Real-time document update:', payload.eventType);
+          fetchDocuments();
         }
-      }
-    };
-    
-    // NEW: Listen for approval card status changes (approve/reject)
-    const handleApprovalCardStatusChanged = (event: any) => {
-      console.log('📢 [Dashboard] Approval card status changed:', event.type);
-      const { docId, action, approvedBy, rejectedBy } = event.detail;
-      
-      console.log(`🔄 [Dashboard] Removing card ${docId} from Recent Documents (${action})`);
-      
-      // Remove the card from Dashboard widget
-      setDocuments(prev => prev.filter(doc => doc.id !== docId));
-      
-      if (action === 'approved') {
-        console.log(`✅ [Dashboard] Card ${docId} approved by ${approvedBy}, removed from widget`);
-      } else if (action === 'rejected') {
-        console.log(`❌ [Dashboard] Card ${docId} rejected by ${rejectedBy}, removed from widget`);
-      }
-    };
-    
-    // Listen for storage changes to update in real-time (with debouncing)
-    const handleStorageChange = () => debouncedFetch();
-    
-    window.addEventListener('storage', handleStorageChange);
-    window.addEventListener('approval-card-created', handleApprovalCardCreated);
-    window.addEventListener('document-approval-created', handleApprovalCardCreated);
-    window.addEventListener('approval-card-status-changed', handleApprovalCardStatusChanged);
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'documents' },
+        (payload) => {
+          console.log('📢 [Dashboard] Real-time document change:', payload.eventType);
+          fetchDocuments();
+        }
+      )
+      .subscribe();
     
     return () => {
-      // Clear debounce timeout on cleanup
-      if (fetchTimeoutRef.current) {
-        clearTimeout(fetchTimeoutRef.current);
-      }
-      window.removeEventListener('storage', handleStorageChange);
-      window.removeEventListener('approval-card-created', handleApprovalCardCreated);
-      window.removeEventListener('document-approval-created', handleApprovalCardCreated);
-      window.removeEventListener('approval-card-status-changed', handleApprovalCardStatusChanged);
+      supabase.removeChannel(channel);
     };
   }, [userRole, user, isUserInRecipients]);
 

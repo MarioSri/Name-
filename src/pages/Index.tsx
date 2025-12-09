@@ -9,6 +9,7 @@ const Index = () => {
   const { user, isAuthenticated, isLoading, login } = useAuth();
   const navigate = useNavigate();
   const [loadingKey, setLoadingKey] = useState(0);
+  const [forceShowLogin, setForceShowLogin] = useState(false);
 
   // Generate new loading key whenever isLoading changes to true
   useEffect(() => {
@@ -16,6 +17,17 @@ const Index = () => {
       setLoadingKey(Date.now());
     }
   }, [isLoading]);
+
+  // Safety timeout - force show login after 3 seconds if still loading
+  useEffect(() => {
+    if (isLoading && !forceShowLogin) {
+      const timeout = setTimeout(() => {
+        console.warn('⚠️ Index: Loading timeout - forcing login display');
+        setForceShowLogin(true);
+      }, 3000);
+      return () => clearTimeout(timeout);
+    }
+  }, [isLoading, forceShowLogin]);
 
   const handleLogin = async (role: string) => {
     try {
@@ -51,7 +63,7 @@ const Index = () => {
     }
   }, [isAuthenticated, user, navigate]);
 
-  if (isLoading) {
+  if (isLoading && !forceShowLogin) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gradient-subtle">
         <HITAMTreeLoading key={loadingKey} size="lg" />
