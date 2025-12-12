@@ -22,6 +22,7 @@ import Analytics from "./pages/Analytics";
 
 import Emergency from "./pages/Emergency";
 import Profile from "./pages/Profile";
+import AuthCallback from "./pages/AuthCallback";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -93,6 +94,8 @@ const App = () => (
                     <Profile />
                   </ProtectedRoute>
                 } />
+                {/* Auth callback route for Google OAuth */}
+                <Route path="/auth/callback" element={<AuthCallback />} />
                 {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
                 <Route path="*" element={<NotFound />} />
               </Routes>

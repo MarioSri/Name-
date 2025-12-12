@@ -113,14 +113,14 @@ CREATE POLICY "recipients_insert_anon" ON recipients
     FOR INSERT WITH CHECK (true);
 
 -- ==========================================
--- OPERATIONS TABLE
+-- OPERATIONS TABLE (commented out - table doesn't exist yet)
 -- ==========================================
 
-CREATE POLICY "operations_select_anon" ON operations
-    FOR SELECT USING (true);
+-- CREATE POLICY "operations_select_anon" ON operations
+--     FOR SELECT USING (true);
 
-CREATE POLICY "operations_insert_anon" ON operations
-    FOR INSERT WITH CHECK (true);
+-- CREATE POLICY "operations_insert_anon" ON operations
+--     FOR INSERT WITH CHECK (true);
 
-CREATE POLICY "operations_update_anon" ON operations
-    FOR UPDATE USING (true);
+-- CREATE POLICY "operations_update_anon" ON operations
+--     FOR UPDATE USING (true);
