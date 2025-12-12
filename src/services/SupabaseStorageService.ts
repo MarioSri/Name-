@@ -329,57 +329,137 @@ class SupabaseStorageService {
       `)
       .order('created_at', { ascending: false });
 
-    if (error) throw error;
+    if (error) {
+      console.error('❌ [Storage] Error fetching documents:', error);
+      throw error;
+    }
     
-    // Convert junction table objects to arrays for backward compatibility
-    // Note: document_recipients table has: recipient_id (UUID), recipient_type, approval_order, approval_status
-    return (data || []).map(doc => ({
-      ...doc,
-      recipients: doc.doc_recipients?.map((r: any) => ({
-        recipient_id: r.recipient_id,
-        recipient_type: r.recipient_type,
-        order_index: r.approval_order,
-        status: r.approval_status
-      })) || []
-    }));
+    console.log(`📦 [Storage] Raw documents from Supabase:`, data?.length || 0);
+    
+    // Get submitter info for each document (batch lookup by UUIDs)
+    const submitterUuids = [...new Set((data || []).map(doc => doc.created_by).filter(Boolean))];
+    const submitterMap = new Map<string, Recipient>();
+    
+    if (submitterUuids.length > 0) {
+      const { data: submitters } = await supabase
+        .from('recipients')
+        .select('*')
+        .in('id', submitterUuids);
+      
+      (submitters || []).forEach(s => submitterMap.set(s.id, s));
+    }
+    
+    // Map Supabase columns to TypeScript interface
+    return (data || []).map(doc => {
+      const submitter = submitterMap.get(doc.created_by);
+      return {
+        id: doc.id,
+        tracking_id: doc.document_id || doc.id,
+        title: doc.title || 'Untitled',
+        description: doc.description,
+        type: doc.document_type || 'letter',
+        priority: doc.priority || 'normal',
+        status: doc.status || 'pending',
+        submitter_id: doc.created_by,
+        submitter_name: submitter?.name || 'Unknown',
+        submitter_role: submitter?.role || submitter?.role_type || '',
+        routing_type: doc.routing_type || 'sequential',
+        is_emergency: doc.priority === 'emergency' || doc.priority === 'urgent',
+        is_parallel: doc.routing_type === 'parallel',
+        source: 'supabase',
+        file_url: doc.file_url || doc.google_drive_url,
+        file_name: doc.file_name,
+        file_size: doc.file_size,
+        metadata: doc.metadata,
+        workflow: doc.metadata?.workflow,
+        created_at: doc.created_at,
+        updated_at: doc.updated_at,
+        recipients: doc.doc_recipients?.map((r: any) => ({
+          recipient_id: r.recipient_id,
+          recipient_user_id: r.recipient_id,
+          recipient_name: '',
+          recipient_type: r.recipient_type,
+          order_index: r.approval_order || 0,
+          status: r.approval_status || 'pending'
+        })) || []
+      };
+    });
   }
 
   async getDocumentsBySubmitter(submitterId: string): Promise<Document[]> {
-    // Try to find by UUID first, then by user_id lookup
-    let query = supabase
+    // Resolve UUID if needed
+    let submitterUuid = submitterId;
+    let submitterInfo: Recipient | null = null;
+    
+    if (!submitterId.match(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i)) {
+      // Look up the recipient UUID from user_id
+      submitterInfo = await this.getRecipientByUserId(submitterId);
+      if (submitterInfo) {
+        submitterUuid = submitterInfo.id;
+        console.log(`✅ [Storage] Resolved user_id ${submitterId} to UUID ${submitterUuid}`);
+      } else {
+        console.warn(`⚠️ [Storage] Could not find recipient for user_id: ${submitterId}`);
+        return [];
+      }
+    } else {
+      // Already a UUID, fetch the recipient info for name/role
+      const { data: recipientData } = await supabase
+        .from('recipients')
+        .select('*')
+        .eq('id', submitterId)
+        .single();
+      submitterInfo = recipientData;
+    }
+    
+    console.log(`📡 [Storage] Getting documents for UUID: ${submitterUuid}`);
+    
+    // Query documents (simple query without complex join)
+    const { data, error } = await supabase
       .from('documents')
       .select(`
         *,
         doc_recipients:document_recipients(*)
-      `);
-    
-    // If it looks like a UUID, query directly; otherwise lookup recipient first
-    if (submitterId.match(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i)) {
-      query = query.eq('created_by', submitterId);
-    } else {
-      // Look up the recipient UUID from user_id
-      const recipient = await this.getRecipientByUserId(submitterId);
-      if (recipient) {
-        query = query.eq('created_by', recipient.id);
-      } else {
-        // No matching recipient found, return empty array
-        return [];
-      }
+      `)
+      .eq('created_by', submitterUuid)
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      console.error('❌ [Storage] Error fetching documents:', error);
+      throw error;
     }
     
-    const { data, error } = await query.order('created_at', { ascending: false });
-
-    if (error) throw error;
+    console.log(`✅ [Storage] Found ${data?.length || 0} documents for user ${submitterId}`);
     
-    // Convert junction table objects to arrays for backward compatibility
-    // Note: document_recipients table has: recipient_id (UUID), recipient_type, approval_order, approval_status
+    // Map Supabase columns to TypeScript interface
     return (data || []).map(doc => ({
-      ...doc,
+      id: doc.id,
+      tracking_id: doc.document_id || doc.id,
+      title: doc.title || 'Untitled',
+      description: doc.description,
+      type: doc.document_type || 'letter',
+      priority: doc.priority || 'normal',
+      status: doc.status || 'pending',
+      submitter_id: submitterInfo?.user_id || doc.created_by, // Use user_id for matching
+      submitter_name: submitterInfo?.name || 'Unknown',
+      submitter_role: submitterInfo?.role || submitterInfo?.role_type || '',
+      routing_type: doc.routing_type || 'sequential',
+      is_emergency: doc.priority === 'emergency' || doc.priority === 'urgent',
+      is_parallel: doc.routing_type === 'parallel',
+      source: 'supabase',
+      file_url: doc.file_url || doc.google_drive_url,
+      file_name: doc.file_name,
+      file_size: doc.file_size,
+      metadata: doc.metadata,
+      workflow: doc.metadata?.workflow,
+      created_at: doc.created_at,
+      updated_at: doc.updated_at,
       recipients: doc.doc_recipients?.map((r: any) => ({
         recipient_id: r.recipient_id,
+        recipient_user_id: r.recipient_id,
+        recipient_name: '',
         recipient_type: r.recipient_type,
-        order_index: r.approval_order,
-        status: r.approval_status
+        order_index: r.approval_order || 0,
+        status: r.approval_status || 'pending'
       })) || []
     }));
   }
@@ -398,15 +478,47 @@ class SupabaseStorageService {
     if (error && error.code !== 'PGRST116') throw error;
     if (!data) return null;
     
-    // Convert junction table objects for backward compatibility
-    // Note: document_recipients table has: recipient_id (UUID), recipient_type, approval_order, approval_status
+    // Get submitter info
+    let submitter: Recipient | null = null;
+    if (data.created_by) {
+      const { data: submitterData } = await supabase
+        .from('recipients')
+        .select('*')
+        .eq('id', data.created_by)
+        .single();
+      submitter = submitterData;
+    }
+    
+    // Map Supabase columns to TypeScript interface
     return {
-      ...data,
+      id: data.id,
+      tracking_id: data.document_id || data.id,
+      title: data.title || 'Untitled',
+      description: data.description,
+      type: data.document_type || 'letter',
+      priority: data.priority || 'normal',
+      status: data.status || 'pending',
+      submitter_id: data.created_by,
+      submitter_name: submitter?.name || 'Unknown',
+      submitter_role: submitter?.role || submitter?.role_type || '',
+      routing_type: data.routing_type || 'sequential',
+      is_emergency: data.priority === 'emergency' || data.priority === 'urgent',
+      is_parallel: data.routing_type === 'parallel',
+      source: 'supabase',
+      file_url: data.file_url || data.google_drive_url,
+      file_name: data.file_name,
+      file_size: data.file_size,
+      metadata: data.metadata,
+      workflow: data.metadata?.workflow,
+      created_at: data.created_at,
+      updated_at: data.updated_at,
       recipients: data.doc_recipients?.map((r: any) => ({
         recipient_id: r.recipient_id,
+        recipient_user_id: r.recipient_id,
+        recipient_name: '',
         recipient_type: r.recipient_type,
-        order_index: r.approval_order,
-        status: r.approval_status
+        order_index: r.approval_order || 0,
+        status: r.approval_status || 'pending'
       })) || []
     };
   }
@@ -565,18 +677,75 @@ class SupabaseStorageService {
       `)
       .order('created_at', { ascending: false });
 
-    if (error) throw error;
+    if (error) {
+      console.error('❌ [Storage] Error fetching approval cards:', error);
+      throw error;
+    }
     
-    // Convert junction table objects to arrays for backward compatibility
-    // Note: approval_card_recipients table has: recipient_id (UUID), recipient_type, approval_order
-    return (data || []).map(card => ({
-      ...card,
-      recipients: card.card_recipients?.map((r: any) => ({
-        recipient_id: r.recipient_id,
-        recipient_type: r.recipient_type,
-        order_index: r.approval_order
-      })) || []
-    }));
+    console.log(`📦 [Storage] Raw approval cards from Supabase:`, data?.length || 0);
+    
+    // Get submitter info for each card (batch lookup by UUIDs)
+    const submitterUuids = [...new Set((data || []).map(card => card.submitted_by).filter(Boolean))];
+    const submitterMap = new Map<string, Recipient>();
+    
+    if (submitterUuids.length > 0) {
+      const { data: submitters } = await supabase
+        .from('recipients')
+        .select('*')
+        .in('id', submitterUuids);
+      
+      (submitters || []).forEach(s => submitterMap.set(s.id, s));
+    }
+    
+    // Also look up current_approver info to get user_id
+    const approverUuids = [...new Set((data || []).map(c => c.current_approver_id).filter(Boolean))];
+    const approverMap = new Map<string, Recipient>();
+    
+    if (approverUuids.length > 0) {
+      const { data: approvers } = await supabase
+        .from('recipients')
+        .select('*')
+        .in('id', approverUuids);
+      
+      (approvers || []).forEach(a => approverMap.set(a.id, a));
+    }
+    
+    // Map Supabase columns to TypeScript interface
+    return (data || []).map(card => {
+      const submitter = submitterMap.get(card.submitted_by);
+      const currentApprover = approverMap.get(card.current_approver_id);
+      
+      return {
+        id: card.id,
+        approval_id: card.card_id || card.id,
+        document_id: card.document_id,
+        tracking_card_id: card.card_id || card.id,
+        title: card.title || 'Untitled',
+        description: card.description,
+        type: card.routing_type || 'approval',
+        priority: card.priority || 'normal',
+        status: card.status || 'pending',
+        submitter: submitter?.name || 'Unknown',
+        submitter_id: submitter?.user_id || card.submitted_by, // Use user_id for matching
+        current_recipient_id: currentApprover?.user_id || card.current_approver_id, // Use user_id for matching
+        routing_type: card.routing_type || 'sequential',
+        is_emergency: card.priority === 'emergency' || card.priority === 'urgent',
+        is_parallel: card.routing_type === 'parallel',
+        source: 'supabase',
+        workflow: card.metadata?.workflow,
+        comments: '',
+        created_at: card.created_at,
+        updated_at: card.updated_at,
+        recipients: card.card_recipients?.map((r: any) => ({
+          recipient_id: r.recipient_id,
+          recipient_user_id: r.recipient_id,
+          recipient_name: '',
+          recipient_type: r.recipient_type,
+          order_index: r.approval_order || 0,
+          status: r.status || 'pending'
+        })) || []
+      };
+    });
   }
 
   async getApprovalCardsByRecipient(recipientUserId: string): Promise<ApprovalCard[]> {
@@ -586,10 +755,17 @@ class SupabaseStorageService {
       const recipient = await this.getRecipientByUserId(recipientUserId);
       if (recipient) {
         recipientUuid = recipient.id;
+        console.log(`✅ [Storage] Resolved user_id ${recipientUserId} to UUID ${recipientUuid}`);
+      } else {
+        console.warn(`⚠️ [Storage] Could not find recipient for user_id: ${recipientUserId}`);
+        // Return empty array if we can't find the recipient - prevents invalid queries
+        return [];
       }
     }
     
-    // Get cards where this user is the current approver (use correct column name)
+    console.log(`📡 [Storage] Getting approval cards for UUID: ${recipientUuid}`);
+    
+    // Get cards where this user is the current approver (simple query without complex join)
     const { data: directCards, error: directError } = await supabase
       .from('approval_cards')
       .select(`
@@ -600,10 +776,12 @@ class SupabaseStorageService {
       .eq('status', 'pending')
       .order('created_at', { ascending: false });
 
-    if (directError) throw directError;
+    if (directError) {
+      console.error('❌ [Storage] Error fetching direct approval cards:', directError);
+      throw directError;
+    }
 
     // Also get cards where this user is in the recipients list
-    // Use recipient_id (UUID) instead of recipient_user_id which doesn't exist
     const { data: recipientCards, error: recipientError } = await supabase
       .from('approval_card_recipients')
       .select(`
@@ -615,7 +793,10 @@ class SupabaseStorageService {
       .eq('recipient_id', recipientUuid)
       .eq('status', 'pending');
 
-    if (recipientError) throw recipientError;
+    if (recipientError) {
+      console.error('❌ [Storage] Error fetching recipient cards:', recipientError);
+      throw recipientError;
+    }
 
     // Combine and deduplicate
     const allCards = [...(directCards || [])];
@@ -627,16 +808,70 @@ class SupabaseStorageService {
       }
     });
 
-    // Convert junction table objects to arrays for backward compatibility
-    // Note: approval_card_recipients table has: recipient_id (UUID), recipient_type, approval_order
-    return allCards.map(card => ({
-      ...card,
-      recipients: card.card_recipients?.map((r: any) => ({
-        recipient_id: r.recipient_id,
-        recipient_type: r.recipient_type,
-        order_index: r.approval_order
-      })) || []
-    }));
+    console.log(`✅ [Storage] Found ${allCards.length} approval cards (${directCards?.length || 0} direct, ${recipientCards?.length || 0} via recipients)`);
+
+    // Get submitter info for all cards (batch lookup)
+    const submitterUuids = [...new Set(allCards.map(c => c.submitted_by).filter(Boolean))];
+    const submitterMap = new Map<string, Recipient>();
+    
+    if (submitterUuids.length > 0) {
+      const { data: submitters } = await supabase
+        .from('recipients')
+        .select('*')
+        .in('id', submitterUuids);
+      
+      (submitters || []).forEach(s => submitterMap.set(s.id, s));
+    }
+
+    // Also look up current_approver info to get user_id
+    const approverUuids = [...new Set(allCards.map(c => c.current_approver_id).filter(Boolean))];
+    const approverMap = new Map<string, Recipient>();
+    
+    if (approverUuids.length > 0) {
+      const { data: approvers } = await supabase
+        .from('recipients')
+        .select('*')
+        .in('id', approverUuids);
+      
+      (approvers || []).forEach(a => approverMap.set(a.id, a));
+    }
+
+    // Map Supabase columns to TypeScript interface
+    return allCards.map(card => {
+      const submitter = submitterMap.get(card.submitted_by);
+      const currentApprover = approverMap.get(card.current_approver_id);
+      
+      return {
+        id: card.id,
+        approval_id: card.card_id || card.id,
+        document_id: card.document_id,
+        tracking_card_id: card.card_id || card.id,
+        title: card.title || 'Untitled',
+        description: card.description,
+        type: card.routing_type || 'approval',
+        priority: card.priority || 'normal',
+        status: card.status || 'pending',
+        submitter: submitter?.name || 'Unknown',
+        submitter_id: submitter?.user_id || card.submitted_by, // Use user_id for matching
+        current_recipient_id: currentApprover?.user_id || card.current_approver_id, // Use user_id for matching
+        routing_type: card.routing_type || 'sequential',
+        is_emergency: card.priority === 'emergency' || card.priority === 'urgent',
+        is_parallel: card.routing_type === 'parallel',
+        source: 'supabase',
+        workflow: card.metadata?.workflow,
+        comments: '',
+        created_at: card.created_at,
+        updated_at: card.updated_at,
+        recipients: card.card_recipients?.map((r: any) => ({
+          recipient_id: r.recipient_id,
+          recipient_user_id: r.recipient_id,
+          recipient_name: '',
+          recipient_type: r.recipient_type,
+          order_index: r.approval_order || 0,
+          status: r.status || 'pending'
+        })) || []
+      };
+    });
   }
 
   async getApprovalCardByApprovalId(approvalId: string): Promise<ApprovalCard | null> {
@@ -653,14 +888,46 @@ class SupabaseStorageService {
     if (error && error.code !== 'PGRST116') throw error;
     if (!data) return null;
     
-    // Convert junction table objects for backward compatibility
-    // Note: approval_card_recipients table has: recipient_id (UUID), recipient_type, approval_order
+    // Get submitter info
+    let submitter: Recipient | null = null;
+    if (data.submitted_by) {
+      const { data: submitterData } = await supabase
+        .from('recipients')
+        .select('*')
+        .eq('id', data.submitted_by)
+        .single();
+      submitter = submitterData;
+    }
+    
+    // Map Supabase columns to TypeScript interface
     return {
-      ...data,
+      id: data.id,
+      approval_id: data.card_id || data.id,
+      document_id: data.document_id,
+      tracking_card_id: data.card_id || data.id,
+      title: data.title || 'Untitled',
+      description: data.description,
+      type: data.routing_type || 'approval',
+      priority: data.priority || 'normal',
+      status: data.status || 'pending',
+      submitter: submitter?.name || 'Unknown',
+      submitter_id: data.submitted_by,
+      current_recipient_id: data.current_approver_id,
+      routing_type: data.routing_type || 'sequential',
+      is_emergency: data.priority === 'emergency' || data.priority === 'urgent',
+      is_parallel: data.routing_type === 'parallel',
+      source: 'supabase',
+      workflow: data.metadata?.workflow,
+      comments: '',
+      created_at: data.created_at,
+      updated_at: data.updated_at,
       recipients: data.card_recipients?.map((r: any) => ({
         recipient_id: r.recipient_id,
+        recipient_user_id: r.recipient_id,
+        recipient_name: '',
         recipient_type: r.recipient_type,
-        order_index: r.approval_order
+        order_index: r.approval_order || 0,
+        status: r.status || 'pending'
       })) || []
     };
   }

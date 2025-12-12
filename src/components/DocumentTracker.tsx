@@ -36,7 +36,6 @@ import {
 import { DigitalSignature } from "./DigitalSignature";
 import { useToast } from "@/hooks/use-toast";
 import { isUserInvolvedInDocument } from "@/utils/recipientMatching";
-import { useRealTimeDocuments } from "@/hooks/useRealTimeDocuments";
 import { useSupabaseRealTimeDocuments } from "@/hooks/useSupabaseRealTimeDocuments";
 import isJpg from 'is-jpg';
 
@@ -232,113 +231,46 @@ export const DocumentTracker: React.FC<DocumentTrackerProps> = ({ userRole, user
 
   const { toast } = useToast();
   
-  // Try Supabase first, fallback to localStorage-based system
+  // Use Supabase only - no localStorage fallback
   const supabaseHook = useSupabaseRealTimeDocuments();
-  const localStorageHook = useRealTimeDocuments();
   
-  // Use Supabase if connected, otherwise fallback to localStorage
-  const isUsingSupabase = supabaseHook.isConnected;
+  // Always use Supabase data
   const {
     trackDocuments,
     loading,
     error,
-  } = isUsingSupabase ? supabaseHook : localStorageHook;
+  } = supabaseHook;
   
   // Create unified updateRecipients function
   const updateRecipients = async (documentId: string, recipients: string[], recipientIds: string[]) => {
-    if (isUsingSupabase) {
-      // For Supabase, update the document's recipients array
-      await supabaseHook.updateDocument(documentId, { recipients: recipientIds });
-    } else {
-      // Use localStorage hook's updateRecipients
-      await localStorageHook.updateRecipients(documentId, recipients, recipientIds);
-    }
+    // For Supabase, update the document's recipients array
+    await supabaseHook.updateDocument(documentId, { recipients: recipientIds });
   };
   
-  // Track locally created documents that may not be in Supabase yet
-  const [locallyCreatedDocs, setLocallyCreatedDocs] = useState<Set<string>>(new Set());
-
-  // Merge real-time documents with localStorage - PREVENT FLICKERING
-  // This ensures newly created cards don't disappear while waiting for Supabase sync
+  // Log when trackDocuments change for debugging
   useEffect(() => {
-    // Get localStorage documents for merging
-    const storedDocs = JSON.parse(localStorage.getItem('submitted-documents') || '[]');
-    
-    // Create a map of Supabase docs by ID for quick lookup
-    const supabaseDocMap = new Map(trackDocuments.map(doc => [doc.id, doc]));
-    
-    // Merge: Start with Supabase data, then add any localStorage docs not in Supabase
-    const mergedDocs: Document[] = [...trackDocuments];
-    
-    // Add localStorage documents that aren't in Supabase yet (newly created)
-    storedDocs.forEach((storedDoc: any) => {
-      if (!supabaseDocMap.has(storedDoc.id)) {
-        // This doc exists in localStorage but not in Supabase - keep it!
-        console.log('📌 [Track Documents] Keeping localStorage doc not yet in Supabase:', storedDoc.id);
-        mergedDocs.unshift(storedDoc);
-        setLocallyCreatedDocs(prev => new Set(prev).add(storedDoc.id));
-      }
-    });
-    
-    // Only update if there's actual change to prevent unnecessary re-renders
-    setSubmittedDocuments(prev => {
-      const prevIds = new Set(prev.map(d => d.id));
-      const newIds = new Set(mergedDocs.map(d => d.id));
-      
-      // Check if the document sets are different
-      if (prevIds.size !== newIds.size || ![...prevIds].every(id => newIds.has(id))) {
-        console.log('📄 [Track Documents] Updating with merged documents:', mergedDocs.length);
-        return mergedDocs;
-      }
-      return prev;
-    });
+    console.log('📄 [Track Documents] Data from Supabase:', trackDocuments.length, 'documents');
+    console.log('📄 [Track Documents] Documents:', trackDocuments);
+  }, [trackDocuments]);
+
+  // SIMPLIFIED: Directly update submittedDocuments when trackDocuments changes
+  useEffect(() => {
+    if (trackDocuments.length > 0) {
+      console.log('📄 [Track Documents] Setting submittedDocuments:', trackDocuments.length);
+      setSubmittedDocuments(trackDocuments);
+    }
   }, [trackDocuments]);
   
-  // Load submitted documents and user profile from localStorage (fallback)
+  // Handle workflow updates - notifications only (data synced via Supabase realtime)
   useEffect(() => {
-    // Merge localStorage documents with current state (don't overwrite!)
-    const loadSubmittedDocuments = () => {
-      const stored = JSON.parse(localStorage.getItem('submitted-documents') || '[]');
-      console.log('📄 [Track Documents] Loading submitted documents:', stored.length, 'documents');
-      console.log('📋 [Track Documents] Documents:', stored.map(doc => ({ id: doc.id, title: doc.title, submittedBy: doc.submittedBy })));
-      
-      // CRITICAL FIX: Merge localStorage with current state instead of replacing
-      setSubmittedDocuments(prev => {
-        const existingIds = new Set(prev.map(d => d.id));
-        const newDocs = stored.filter((doc: any) => !existingIds.has(doc.id));
-        
-        if (newDocs.length > 0) {
-          console.log('➕ [Track Documents] Adding', newDocs.length, 'new docs from localStorage');
-          return [...newDocs, ...prev];
-        }
-        
-        // If prev is empty but localStorage has docs, use localStorage
-        if (prev.length === 0 && stored.length > 0) {
-          console.log('📥 [Track Documents] Initializing from localStorage:', stored.length, 'docs');
-          return stored;
-        }
-        
-        return prev;
-      });
-    };
-    
     // Handle workflow updates from Approval Chain with Bypass
     const handleWorkflowUpdate = (event?: any) => {
       console.log('🔄 [Track Documents] Workflow update event received:', event?.detail);
       
-      // If event contains trackingCard, add it directly to state
+      // Supabase realtime will handle data sync - just show notification if needed
       if (event?.detail?.trackingCard) {
         const newCard = event.detail.trackingCard;
         console.log('✨ [Track Documents] Workflow tracking card received:', newCard.title);
-        
-        setSubmittedDocuments(prev => {
-          const exists = prev.some(doc => doc.id === newCard.id);
-          if (!exists) {
-            console.log('✅ [Track Documents] Adding workflow tracking card to state');
-            return [newCard, ...prev];
-          }
-          return prev;
-        });
         
         toast({
           title: "Document Tracking Started",
@@ -346,9 +278,7 @@ export const DocumentTracker: React.FC<DocumentTrackerProps> = ({ userRole, user
           duration: 3000,
         });
       }
-      
-      // Also reload from localStorage to catch any missed updates
-      loadSubmittedDocuments();
+      // Data will auto-update via Supabase realtime subscription
     };
 
     const handleEmergencyDocumentCreated = (event: CustomEvent) => {
@@ -357,19 +287,7 @@ export const DocumentTracker: React.FC<DocumentTrackerProps> = ({ userRole, user
       
       if (emergencyDoc) {
         console.log('📋 [Track Documents] Adding emergency document:', emergencyDoc.title);
-        setSubmittedDocuments(prev => {
-          // Check if document already exists to avoid duplicates
-          const exists = prev.some(doc => doc.id === emergencyDoc.id);
-          if (!exists) {
-            console.log('✅ [Track Documents] Emergency document added to state');
-            return [emergencyDoc, ...prev];
-          } else {
-            console.log('ℹ️ [Track Documents] Emergency document already exists, skipping');
-            return prev;
-          }
-        });
-        
-        // Show notification that emergency document card was created
+        // Show notification - data will sync via Supabase realtime
         toast({
           title: "Emergency Document Card Created",
           description: `${emergencyDoc.title} is now visible with emergency features applied`,
@@ -418,15 +336,15 @@ export const DocumentTracker: React.FC<DocumentTrackerProps> = ({ userRole, user
       setApprovalComments(comments);
     };
     
-    loadSubmittedDocuments();
+    // Only load user profile and comments (data comes from Supabase hook)
     loadUserProfile();
     loadApprovalComments();
     saveTrackDocuments();
     
     // Listen for document submission events
     const handleDocumentSubmitted = (event?: any) => {
-      console.log('📢 [Track Documents] Document submission event received, reloading...', event?.detail);
-      loadSubmittedDocuments();
+      console.log('📢 [Track Documents] Document submission event received:', event?.detail);
+      // Data will auto-update via Supabase realtime subscription
       
       // Show immediate feedback for new submissions
       if (event?.detail?.trackingCard) {
@@ -454,7 +372,7 @@ export const DocumentTracker: React.FC<DocumentTrackerProps> = ({ userRole, user
     const handleStorageChange = (e: StorageEvent) => {
       if (e.key === 'submitted-documents') {
         console.log('📢 [Track Documents] Storage change detected for submitted-documents');
-        loadSubmittedDocuments();
+        // Data syncs via Supabase realtime - no manual reload needed
       } else if (e.key === 'user-profile') {
         loadUserProfile();
       } else if (e.key === 'document-comments') {
@@ -489,8 +407,7 @@ export const DocumentTracker: React.FC<DocumentTrackerProps> = ({ userRole, user
         return doc;
       }));
       
-      // Also reload from localStorage to ensure consistency
-      loadSubmittedDocuments();
+      // Data syncs via Supabase realtime - no manual reload needed
       
       if (documentId) {
         const signedCount = totalSigned || 1;

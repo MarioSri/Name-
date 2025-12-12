@@ -66,7 +66,8 @@ const Approvals = () => {
     setComments({});
     setSharedComments({});
     
-    // Listen for document management approval cards
+    // Listen for document management approval cards - show notifications only
+    // Supabase real-time subscription in the hook handles actual data updates
     const handleDocumentApprovalCreated = (event: any) => {
       console.log('🚨 [Approvals] Document approval event received:', event.type);
       const approval = event.detail?.approval || event.detail?.document || event.detail?.approvalCard;
@@ -96,29 +97,15 @@ const Approvals = () => {
         });
         console.log(`🔍 [Approvals] Should show card "${approval.title}" to current user: ${shouldShow}`);
         
-        // Add to state if not duplicate and user should see it
-        setPendingApprovals(prev => {
-          const isDuplicate = prev.some((existing: any) => existing.id === approval.id);
-          
-          if (!isDuplicate) {
-            console.log('✅ [Approvals] Adding approval card to state');
-            const newState = [approval, ...prev];
-            
-            // Show notification if user should see this card
-            if (shouldShow) {
-              toast({
-                title: "New Approval Required",
-                description: `${approval.title} requires your approval`,
-                duration: 5000,
-              });
-            }
-            
-            return newState;
-          } else {
-            console.log('ℹ️ [Approvals] Approval card already exists, skipping duplicate');
-            return prev;
-          }
-        });
+        // Show notification if user should see this card
+        // The hook's real-time subscription will handle updating the data
+        if (shouldShow) {
+          toast({
+            title: "New Approval Required",
+            description: `${approval.title} requires your approval`,
+            duration: 5000,
+          });
+        }
       } else {
         // No event detail - Supabase subscription will handle updates
         console.log('🔄 [Approvals] No event detail, Supabase subscription will sync');
@@ -136,15 +123,20 @@ const Approvals = () => {
     // 🆕 Listen for approval card updates (bypass/rejection handling)
     const handleApprovalCardUpdate = (event: any) => {
       console.log('🔄 Approval card update received:', event.detail);
-      // Approvals updated via Supabase subscription - no localStorage reload needed
+      // Approvals updated via Supabase subscription - no manual state update needed
       console.log('📥 [Approvals] Card update event received, Supabase will sync');
       
       // Show notification if user is now the current recipient
       if (event.detail?.action === 'bypassed' && user) {
-        const updatedCard = stored.find((card: any) => card.id === event.detail.docId);
-        if (updatedCard && isUserInRecipients(updatedCard)) {
+        // Find in current approval cards from hook
+        const updatedCard = approvalCards.find((card: any) => card.id === event.detail.docId);
+        if (updatedCard && isUserInRecipients({
+          user: { id: user.id, name: user.name, role: user.role, department: user.department, branch: user.branch },
+          recipients: updatedCard.recipients,
+          recipientIds: updatedCard.recipientIds,
+          workflowSteps: updatedCard.workflow?.steps
+        })) {
           // Check if it's now user's turn
-          // Get tracking card from the event or approval card workflow directly
           const trackingCard = updatedCard;
           
           if (trackingCard?.workflow?.steps) {
@@ -188,7 +180,7 @@ const Approvals = () => {
       window.removeEventListener('shared-comment-updated', handleSharedCommentUpdate);
       window.removeEventListener('approval-card-updated', handleApprovalCardUpdate);
     };
-  }, [user]);
+  }, [user, approvalCards]);
 
   const handleLogout = () => {
     logout();
@@ -684,66 +676,17 @@ const Approvals = () => {
     return null; // This should be handled by ProtectedRoute, but adding as safety
   }
 
-  const [pendingApprovals, setPendingApprovals] = useState<any[]>([]);
-  const [realTimePendingApprovals, setRealTimePendingApprovals] = useState<any[]>([]);
+  // SIMPLIFIED: Use approvalCards directly from hook - no duplicate state
+  // The useSupabaseRealTimeDocuments hook already handles realtime updates
+  const realTimePendingApprovals = approvalCards;
   
-  // Use Supabase approval cards directly - NO localStorage merge
+  // Keep pendingApprovals as alias for backwards compatibility with existing code
+  const pendingApprovals = approvalCards;
+  
+  // Log when approval cards change for debugging
   useEffect(() => {
-    // Only update if there's actual change to prevent unnecessary re-renders
-    setRealTimePendingApprovals(prev => {
-      const prevIds = new Set(prev.map((c: any) => c.id));
-      const newIds = new Set(approvalCards.map((c: any) => c.id));
-      
-      if (prevIds.size !== newIds.size || ![...prevIds].every(id => newIds.has(id))) {
-        console.log('📄 [Approvals] Updating with Supabase cards:', approvalCards.length);
-        return approvalCards;
-      }
-      return prev;
-    });
+    console.log('📄 [Approvals] Approval cards from hook:', approvalCards.length, approvalCards);
   }, [approvalCards]);
-  
-  // Load pending approvals from Supabase only
-  useEffect(() => {
-    let subscription: any = null;
-    
-    const loadApprovals = async () => {
-      try {
-        const { supabaseWorkflowService } = await import('@/services/SupabaseWorkflowService');
-        const cards = await supabaseWorkflowService.getApprovalCards(user?.id);
-        setPendingApprovals(cards);
-        if (approvalCards.length === 0) {
-          setRealTimePendingApprovals(cards);
-        }
-      } catch (error) {
-        console.error('Failed to load approval cards from Supabase:', error);
-        setPendingApprovals([]);
-        if (approvalCards.length === 0) {
-          setRealTimePendingApprovals([]);
-        }
-      }
-    };
-    
-    loadApprovals();
-    
-    // Subscribe to real-time updates
-    (async () => {
-      try {
-        const { supabaseWorkflowService } = await import('@/services/SupabaseWorkflowService');
-        subscription = supabaseWorkflowService.subscribeToApprovalCards(user?.id || '', (payload) => {
-          console.log('Real-time approval card update:', payload);
-          loadApprovals();
-        });
-      } catch (error) {
-        console.error('Failed to subscribe to real-time updates:', error);
-      }
-    })();
-    
-    return () => {
-      if (subscription) {
-        subscription.unsubscribe();
-      }
-    };
-  }, [user, approvalCards.length]);
   
   const handleAcceptDocument = async (docId: string) => {
     try {
@@ -1029,8 +972,7 @@ const Approvals = () => {
           }
         }));
         
-        // Remove from local state only for current user
-        setPendingApprovals(prev => prev.filter(d => d.id !== docId));
+        // Data will auto-update via Supabase real-time subscription
       } else if (isApprovalChainBypass && (routingType === 'parallel' || routingType === 'bidirectional') && !isWorkflowComplete) {
         console.log(`  ⚡ Approval Chain Bypass ${routingType.toUpperCase()}: Card stays for all recipients`);
         
@@ -1043,12 +985,11 @@ const Approvals = () => {
           }
         }));
         
-        // Remove from local state only for current user
-        setPendingApprovals(prev => prev.filter(d => d.id !== docId));
+        // Data will auto-update via Supabase real-time subscription
       } else {
         // Workflow complete or non-bypass cards: Remove for everyone
         console.log('  🗑️ Removing card for ALL recipients (workflow complete or non-bypass)');
-        setPendingApprovals(prev => prev.filter(d => d.id !== docId));
+        // Data will auto-update via Supabase real-time subscription
       }
       
       // Dispatch event to update Dashboard widget to remove approved card
@@ -1379,9 +1320,6 @@ const Approvals = () => {
       const routingType = doc.routingType;
       const isApprovalChainBypass = doc.source === 'approval-chain-bypass';
       
-      // Use current pending approvals state (Supabase-backed)
-      let updatedPendingApprovals;
-      
       // 🆕 ALL Approval Chain with Bypass routing types continue workflow
       if (isApprovalChainBypass && (routingType === 'sequential' || routingType === 'parallel' || routingType === 'reverse' || routingType === 'bidirectional')) {
         console.log(`  🔄 Approval Chain Bypass ${routingType.toUpperCase()}: Card continues for others`);
@@ -1395,17 +1333,15 @@ const Approvals = () => {
           }
         }));
         
-        // Remove from local state only for current user
-        setPendingApprovals(prev => prev.filter(d => d.id !== docId));
+        // Data will auto-update via Supabase real-time subscription
       } else if (isParallel && hasBypass) {
         // BYPASS MODE (Emergency Management): Remove only for current user (card stays for others)
         console.log('  🔄 Bypass mode: Removing card only for current user');
-        // Remove from local state only
-        setPendingApprovals(prev => prev.filter(d => d.id !== docId));
+        // Data will auto-update via Supabase real-time subscription
       } else {
         // NO BYPASS: Remove for ALL users
         console.log('  🗑️ Removing card for ALL recipients');
-        setPendingApprovals(prev => prev.filter(d => d.id !== docId));
+        // Data will auto-update via Supabase real-time subscription
         
         // Broadcast rejection event
         window.dispatchEvent(new CustomEvent('document-rejected', {
@@ -1586,17 +1522,35 @@ const Approvals = () => {
 
   // Helper function to check if current user is in recipients list
   const isUserInRecipientsLocal = (doc: any): boolean => {
-    // If no recipients specified, show to everyone (for backward compatibility)
-    if ((!doc.recipients || doc.recipients.length === 0) && (!doc.recipientIds || doc.recipientIds.length === 0)) {
-      console.log('✅ No recipients filter - showing card:', doc.title);
-      return true;
-    }
-    
     const currentUserName = user?.name || '';
     const currentUserRole = user?.role || '';
     const currentUserId = user?.id || '';
     
     console.log(`🔍 Checking card "${doc.title}" for user: ${currentUserName} (${currentUserRole}) [${currentUserId}]`);
+    
+    // ✅ FIRST: Check if current user is the current recipient (for Supabase cards)
+    // This is set when the card is assigned to a specific approver
+    if (doc.currentRecipientId) {
+      console.log(`📋 Checking currentRecipientId: ${doc.currentRecipientId}`);
+      // currentRecipientId might be UUID or user_id - the hook should have resolved it
+      // If it matches current user (by ID match or if user is the current approver), show the card
+      if (doc.currentRecipientId === currentUserId) {
+        console.log('✅ Matches currentRecipientId (exact ID match)');
+        return true;
+      }
+    }
+    
+    // ✅ SECOND: Check submitterId match - user might be viewing their own submitted card
+    if (doc.submitterId && doc.submitterId === currentUserId) {
+      console.log('✅ User is the submitter of this card');
+      return true;
+    }
+    
+    // If no recipients specified, show to everyone (for backward compatibility)
+    if ((!doc.recipients || doc.recipients.length === 0) && (!doc.recipientIds || doc.recipientIds.length === 0)) {
+      console.log('✅ No recipients filter - showing card:', doc.title);
+      return true;
+    }
     
     // Helper to safely extract string from recipient (handles both string and object)
     const getRecipientString = (r: any): string => {
@@ -1796,7 +1750,7 @@ const Approvals = () => {
     const handleDocumentRemoval = (event: any) => {
       const { docId } = event.detail;
       console.log('🗑️ Document removed:', docId);
-      setPendingApprovals(prev => prev.filter(doc => doc.id !== docId));
+      // Data will auto-update via Supabase real-time subscription
     };
 
     // Listen for new approval cards from Emergency Management
@@ -1806,17 +1760,11 @@ const Approvals = () => {
       console.log('👤 Current user:', user?.name, '| Role:', user?.role);
       console.log('👥 Card recipients:', approval.recipients);
       
-      // Check if card already exists
-      setPendingApprovals(prev => {
-        const isDuplicate = prev.some((existing: any) => existing.id === approval.id);
-        
-        if (!isDuplicate) {
-          console.log('✅ Adding new approval card to state');
-          return [approval, ...prev];
-        } else {
-          console.log('ℹ️ Approval card already exists, skipping duplicate');
-          return prev;
-        }
+      // Data will auto-update via Supabase real-time subscription
+      // Show notification only
+      toast({
+        title: "New Approval Card",
+        description: `${approval.title} requires your attention`,
       });
     };
     
@@ -1824,7 +1772,7 @@ const Approvals = () => {
     const handleDocumentRejected = (event: any) => {
       const { docId, rejectedBy } = event.detail;
       console.log('❌ Document rejected:', docId, 'by', rejectedBy);
-      setPendingApprovals(prev => prev.filter(doc => doc.id !== docId));
+      // Data will auto-update via Supabase real-time subscription
       
       toast({
         title: "Document Rejected",

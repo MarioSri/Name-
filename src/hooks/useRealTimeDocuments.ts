@@ -43,12 +43,15 @@ export const useRealTimeDocuments = (): UseRealTimeDocumentsReturn => {
   const loadDataTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const isLoadingRef = useRef(false);
   const hasInitialLoadRef = useRef(false);
+  const lastSuccessfulDataRef = useRef<{ docs: DocumentData[]; approvals: DocumentData[] } | null>(null);
+  const retryCountRef = useRef(0);
+  const maxRetries = 3;
 
   // Load data from Supabase ONLY - NO localStorage
   const loadData = useCallback(async () => {
     if (!user) {
-      // Only clear if we haven't loaded yet
-      if (!hasInitialLoadRef.current) {
+      // Only clear if we haven't loaded yet AND have no cached data
+      if (!hasInitialLoadRef.current && !lastSuccessfulDataRef.current) {
         setTrackDocuments([]);
         setApprovalCards([]);
       }
@@ -66,14 +69,24 @@ export const useRealTimeDocuments = (): UseRealTimeDocumentsReturn => {
       isLoadingRef.current = true;
       setError(null);
 
-      // Get user's Supabase UUID for proper filtering
-      const supabaseUuid = (user as any).supabaseUuid || user.id;
+      // Get user's Supabase UUID for proper filtering - prefer supabaseUuid from auth
+      let supabaseUuid = (user as any).supabaseUuid;
+      
+      // If no supabaseUuid, use user.id but only if it looks like a UUID
+      if (!supabaseUuid) {
+        const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(user.id);
+        supabaseUuid = isUuid ? user.id : user.id; // Will be looked up by service
+      }
 
       // Load track documents from Supabase (documents submitted by current user)
       const docs = await realTimeDocumentService.getDocumentsBySubmitter(supabaseUuid);
       
       // Load approval cards from Supabase (approvals for current user)
       const approvals = await realTimeDocumentService.getApprovalCardsForRecipient(supabaseUuid);
+      
+      // Cache successful data
+      lastSuccessfulDataRef.current = { docs, approvals };
+      retryCountRef.current = 0;
       
       // Update state - SUPABASE DATA ONLY
       setTrackDocuments(docs);
@@ -88,10 +101,26 @@ export const useRealTimeDocuments = (): UseRealTimeDocumentsReturn => {
       setError('Failed to load documents');
       setIsConnected(false);
       
-      // On error, only clear if no initial load yet
-      if (!hasInitialLoadRef.current) {
+      // IMPORTANT: Preserve existing data on error - don't clear state
+      if (!hasInitialLoadRef.current && !lastSuccessfulDataRef.current) {
         setTrackDocuments([]);
         setApprovalCards([]);
+      } else if (lastSuccessfulDataRef.current) {
+        // Restore from cache if we had successful data before
+        console.log('📦 [RealTime] Restoring cached data after error');
+        setTrackDocuments(lastSuccessfulDataRef.current.docs);
+        setApprovalCards(lastSuccessfulDataRef.current.approvals);
+      }
+      
+      // Retry logic for transient failures
+      if (retryCountRef.current < maxRetries) {
+        retryCountRef.current++;
+        console.log(`🔄 [RealTime] Scheduling retry ${retryCountRef.current}/${maxRetries} in 2 seconds...`);
+        setTimeout(() => {
+          isLoadingRef.current = false;
+          loadData();
+        }, 2000);
+        return;
       }
     } finally {
       setLoading(false);
@@ -117,6 +146,7 @@ export const useRealTimeDocuments = (): UseRealTimeDocumentsReturn => {
     loadDataRef.current = loadData;
     debouncedLoadDataRef.current = debouncedLoadData;
   }, [loadData, debouncedLoadData]);
+
 
   // Refetch data
   const refetch = useCallback(async () => {

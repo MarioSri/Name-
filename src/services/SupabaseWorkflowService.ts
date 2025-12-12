@@ -209,8 +209,15 @@ class SupabaseWorkflowService {
         .single();
       if (recipient) {
         recipientUuid = recipient.id;
+        console.log(`✅ [Workflow] Resolved user_id ${recipientUserId} to UUID ${recipientUuid}`);
+      } else {
+        console.warn(`⚠️ [Workflow] Could not find recipient for user_id: ${recipientUserId}`);
+        // Return empty array if we can't resolve the UUID
+        return [];
       }
     }
+
+    console.log(`📡 [Workflow] Getting approval cards for UUID: ${recipientUuid}`);
 
     // Get cards where user is current approver (correct column name)
     const { data: directCards, error: directError } = await supabase

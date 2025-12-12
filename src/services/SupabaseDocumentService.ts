@@ -149,19 +149,42 @@ class SupabaseDocumentService {
    * Get documents by submitter (with recipients)
    */
   async getDocumentsBySubmitter(submitterId: string): Promise<Document[]> {
+    // Get submitter UUID from user_id if needed
+    let submitterUuid = submitterId;
+    if (!submitterId.match(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i)) {
+      // Look up the submitter UUID
+      const { data: recipient } = await supabase
+        .from('recipients')
+        .select('id')
+        .eq('user_id', submitterId)
+        .single();
+      if (recipient) {
+        submitterUuid = recipient.id;
+        console.log(`✅ [DocService] Resolved submitter user_id ${submitterId} to UUID ${submitterUuid}`);
+      } else {
+        console.warn(`⚠️ [DocService] Could not find recipient for submitter user_id: ${submitterId}`);
+        // Return empty array to prevent invalid queries
+        return [];
+      }
+    }
+    
+    console.log(`📡 [DocService] Getting documents for submitter UUID: ${submitterUuid}`);
+    
     const { data, error } = await supabase
       .from('documents')
       .select(`
         *,
         doc_recipients:document_recipients(*)
       `)
-      .eq('created_by', submitterId)
+      .eq('created_by', submitterUuid)
       .order('created_at', { ascending: false });
 
     if (error) {
       console.error('❌ Error fetching documents:', error);
       throw error;
     }
+    
+    console.log(`✅ [DocService] Found ${data?.length || 0} documents`);
 
     // Convert doc_recipients to flat arrays for backward compatibility
     return (data || []).map(doc => ({
@@ -374,8 +397,15 @@ class SupabaseDocumentService {
         .single();
       if (recipient) {
         recipientUuid = recipient.id;
+        console.log(`✅ [DocService] Resolved user_id ${recipientId} to UUID ${recipientUuid}`);
+      } else {
+        console.warn(`⚠️ [DocService] Could not find recipient for user_id: ${recipientId}`);
+        // Return empty array to prevent invalid queries
+        return [];
       }
     }
+    
+    console.log(`📡 [DocService] Getting pending approvals for UUID: ${recipientUuid}`);
     
     // Get cards where this user is the current approver (correct column name)
     const { data: directCards, error: directError } = await supabase
@@ -420,6 +450,8 @@ class SupabaseDocumentService {
         allCards.push(rc.approval_card);
       }
     });
+    
+    console.log(`✅ [DocService] Found ${allCards.length} pending approvals`);
 
     // Convert card_recipients to flat arrays for backward compatibility
     // Note: approval_card_recipients table has: recipient_id (UUID), recipient_type, approval_order

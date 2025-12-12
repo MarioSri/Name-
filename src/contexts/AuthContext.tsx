@@ -329,8 +329,26 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
         
         const fallback = fallbackUsers[role] || fallbackUsers['employee'];
         
+        // Try to look up the UUID for the fallback user from Supabase
+        let fallbackUuid: string | undefined = undefined;
+        try {
+          const { data: fallbackRecipient } = await supabase
+            .from('recipients')
+            .select('id')
+            .eq('user_id', fallback.id)
+            .single();
+          
+          if (fallbackRecipient) {
+            fallbackUuid = fallbackRecipient.id;
+            console.log(`✅ [AuthContext] Found UUID for fallback user ${fallback.id}: ${fallbackUuid}`);
+          }
+        } catch {
+          console.warn(`⚠️ [AuthContext] Could not lookup UUID for fallback user ${fallback.id}`);
+        }
+        
         authenticatedUser = {
           id: fallback.id!,
+          supabaseUuid: fallbackUuid,  // May be undefined if lookup failed
           name: fallback.name!,
           email: fallback.email!,
           role: role as User['role'],

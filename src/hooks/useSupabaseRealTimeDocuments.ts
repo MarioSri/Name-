@@ -179,6 +179,9 @@ export function useSupabaseRealTimeDocuments(): UseSupabaseRealTimeDocumentsResu
   const loadDataTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const isLoadingRef = useRef(false);
   const hasInitialLoadRef = useRef(false);
+  const lastSuccessfulDataRef = useRef<{ docs: DocumentData[]; cards: ApprovalCardData[] } | null>(null);
+  const retryCountRef = useRef(0);
+  const maxRetries = 3;
 
   // Load initial data - SUPABASE ONLY, NO localStorage
   const loadData = useCallback(async () => {
@@ -198,20 +201,46 @@ export function useSupabaseRealTimeDocuments(): UseSupabaseRealTimeDocumentsResu
 
     try {
       // Get user's Supabase UUID for proper filtering - lookup from recipients table
-      const recipient = await supabaseStorage.getRecipientByUserId(user.id);
-      const supabaseUuid = recipient?.id || (user as any).supabaseUuid || user.id;
+      // First check if user already has supabaseUuid from auth context
+      let supabaseUuid = (user as any).supabaseUuid;
+      
+      if (!supabaseUuid) {
+        // Look up from recipients table using user_id
+        const recipient = await supabaseStorage.getRecipientByUserId(user.id);
+        supabaseUuid = recipient?.id;
+        
+        // If still no UUID, try the user.id directly (it might already be a UUID)
+        if (!supabaseUuid) {
+          const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(user.id);
+          if (isUuid) {
+            supabaseUuid = user.id;
+          } else {
+            console.warn('⚠️ [Supabase] Could not find recipient UUID for user:', user.id);
+            // Keep existing data if we have it, don't clear on UUID lookup failure
+            if (lastSuccessfulDataRef.current) {
+              console.log('📦 [Supabase] Keeping cached data since UUID lookup failed');
+              setIsConnected(false);
+              return;
+            }
+          }
+        }
+      }
       
       console.log('🔍 [Supabase] Loading data for user:', user.id, '→ UUID:', supabaseUuid);
       
       // Get user's submitted documents (tracking cards)
-      const docs = await supabaseStorage.getDocumentsBySubmitter(supabaseUuid);
+      const docs = await supabaseStorage.getDocumentsBySubmitter(supabaseUuid || user.id);
       
       // Get approval cards for this user
-      const cards = await supabaseStorage.getApprovalCardsByRecipient(supabaseUuid);
+      const cards = await supabaseStorage.getApprovalCardsByRecipient(supabaseUuid || user.id);
 
       // Convert to frontend format - SUPABASE DATA ONLY
       const supabaseDocs = docs.map(toDocumentData);
       const supabaseCards = cards.map(toApprovalCardData);
+
+      // Cache successful data to prevent loss on subsequent failures
+      lastSuccessfulDataRef.current = { docs: supabaseDocs, cards: supabaseCards };
+      retryCountRef.current = 0; // Reset retry count on success
 
       // Update state atomically
       setTrackDocuments(supabaseDocs);
@@ -225,10 +254,27 @@ export function useSupabaseRealTimeDocuments(): UseSupabaseRealTimeDocumentsResu
       setError(err instanceof Error ? err.message : 'Failed to load data');
       setIsConnected(false);
       
-      // On error, only clear if we haven't loaded data yet
-      if (!hasInitialLoadRef.current) {
+      // IMPORTANT: Preserve existing data on error - don't clear state
+      // Only clear if we haven't ever loaded data successfully
+      if (!hasInitialLoadRef.current && !lastSuccessfulDataRef.current) {
         setTrackDocuments([]);
         setApprovalCards([]);
+      } else if (lastSuccessfulDataRef.current) {
+        // Restore from cache if we had successful data before
+        console.log('📦 [Supabase] Restoring cached data after error');
+        setTrackDocuments(lastSuccessfulDataRef.current.docs);
+        setApprovalCards(lastSuccessfulDataRef.current.cards);
+      }
+      
+      // Retry logic for transient failures
+      if (retryCountRef.current < maxRetries) {
+        retryCountRef.current++;
+        console.log(`🔄 [Supabase] Scheduling retry ${retryCountRef.current}/${maxRetries} in 2 seconds...`);
+        setTimeout(() => {
+          isLoadingRef.current = false;
+          loadData();
+        }, 2000);
+        return;
       }
     } finally {
       setLoading(false);
