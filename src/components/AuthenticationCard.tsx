@@ -9,6 +9,7 @@ import { Building2, Shield, Users, FileText } from "lucide-react";
 import { HITAMTreeLoading } from "@/components/ui/loading-animation";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/lib/supabase";
+import { useAuth } from "@/contexts/AuthContext";
 
 interface AuthenticationCardProps {
   onLogin: (role: string) => void;
@@ -22,6 +23,7 @@ export function AuthenticationCard({ onLogin }: AuthenticationCardProps) {
   const [currentSlide, setCurrentSlide] = useState(0);
   const [showHitamLogin, setShowHitamLogin] = useState(false);
   const { toast } = useToast();
+  const { loginWithEmail, loginWithGoogle } = useAuth();
 
   const carouselImages = [
     '/carousel-1.jpg',
@@ -74,17 +76,19 @@ export function AuthenticationCard({ onLogin }: AuthenticationCardProps) {
       
       // DEMO LOGIN - Quick access for testing
       if (email === 'demo@hitam.org' && password === 'demo123') {
-        sessionStorage.setItem('user-role', selectedRole);
-        sessionStorage.setItem('demo-user', 'true');
-        sessionStorage.setItem('user-email', email);
-        sessionStorage.setItem('user-name', 'Demo User');
-        
-        toast({
-          title: "Demo Login Successful",
-          description: "Welcome, Demo User!",
-        });
-        onLogin(selectedRole);
-        return;
+        // Use AuthContext's login method for proper demo authentication
+        try {
+          await loginWithEmail('principal@hitam.edu.in'); // Use existing recipient
+          toast({
+            title: "Demo Login Successful", 
+            description: "Welcome to IAOMS Demo!",
+          });
+          return;
+        } catch (demoError) {
+          // Fallback to role-based demo login
+          onLogin(selectedRole);
+          return;
+        }
       }
 
       // Step 1: Check if user exists in recipients table
@@ -140,16 +144,20 @@ export function AuthenticationCard({ onLogin }: AuthenticationCardProps) {
         throw error;
       }
 
-      // Step 3: Login successful
-      if (data.user) {
-        // Store role in session
-        sessionStorage.setItem('user-role', selectedRole);
-        
-        toast({
-          title: "Login Successful",
-          description: `Welcome back, ${recipient.name}!`,
-        });
-        onLogin(selectedRole);
+      // Step 3: Login successful - sync with AuthContext
+      if (data.user && data.session) {
+        // Use AuthContext's loginWithEmail to properly set up user state
+        try {
+          await loginWithEmail(email);
+          toast({
+            title: "Login Successful",
+            description: `Welcome back, ${recipient.name}!`,
+          });
+        } catch (authError: any) {
+          console.error('Failed to sync with AuthContext:', authError);
+          // Fallback: use onLogin if AuthContext fails
+          onLogin(selectedRole);
+        }
       }
     } catch (error: any) {
       console.error('HITAM login failed:', error);
@@ -180,18 +188,9 @@ export function AuthenticationCard({ onLogin }: AuthenticationCardProps) {
       // Store selected role for after OAuth callback
       sessionStorage.setItem('pending-role', selectedRole);
       
-      const { error } = await supabase.auth.signInWithOAuth({
-        provider: 'google',
-        options: {
-          redirectTo: `${window.location.origin}/dashboard`,
-          queryParams: {
-            access_type: 'offline',
-            prompt: 'select_account', // Shows account picker
-          },
-        },
-      });
-
-      if (error) throw error;
+      // Use AuthContext's loginWithGoogle method
+      await loginWithGoogle();
+      // Note: loginWithGoogle will redirect, so we don't need to handle success here
     } catch (error: any) {
       console.error('Google login failed:', error);
       toast({
@@ -371,6 +370,7 @@ export function AuthenticationCard({ onLogin }: AuthenticationCardProps) {
                     Use Demo
                   </Button>
                 </div>
+                <p className="text-xs text-muted-foreground mt-2">Or try: principal@hitam.edu.in (any password)</p>
               </div>
             </form>
             )}
@@ -378,6 +378,25 @@ export function AuthenticationCard({ onLogin }: AuthenticationCardProps) {
             <p className="text-xs text-muted-foreground text-center">
               Only institutional accounts (@hitam.org) are allowed
             </p>
+
+            {/* Quick Demo Login */}
+            <Button
+              type="button"
+              variant="secondary"
+              className="w-full"
+              disabled={!selectedRole}
+              onClick={() => {
+                if (selectedRole) {
+                  onLogin(selectedRole);
+                  toast({
+                    title: "Demo Mode Activated",
+                    description: `Logged in as ${selectedRole} (Demo)`,
+                  });
+                }
+              }}
+            >
+              Quick Demo Login
+            </Button>
           </div>
 
           <Separator />

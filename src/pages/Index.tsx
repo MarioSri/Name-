@@ -18,13 +18,13 @@ const Index = () => {
     }
   }, [isLoading]);
 
-  // Safety timeout - force show login after 3 seconds if still loading
+  // Safety timeout - force show login after 1 second if still loading
   useEffect(() => {
     if (isLoading && !forceShowLogin) {
       const timeout = setTimeout(() => {
         console.warn('⚠️ Index: Loading timeout - forcing login display');
         setForceShowLogin(true);
-      }, 3000);
+      }, 1000);
       return () => clearTimeout(timeout);
     }
   }, [isLoading, forceShowLogin]);

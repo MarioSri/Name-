@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { DashboardLayout } from "@/components/DashboardLayout";
 import { DocumentUploader } from "@/components/DocumentUploader";
 import { Badge } from "@/components/ui/badge";
@@ -8,6 +9,8 @@ import { useSupabaseRealTimeDocuments } from "@/hooks/useSupabaseRealTimeDocumen
 import { ExternalNotificationDispatcher } from "@/services/ExternalNotificationDispatcher";
 import { channelAutoCreationService } from "@/services/ChannelAutoCreationService";
 import { getRecipientName } from "@/utils/recipientUtils";
+import { useSupabaseStore } from "@/stores/supabaseStore";
+import { useDocumentStore } from "@/stores/documentStore";
 
 const Documents = () => {
   const { user, logout } = useAuth();
@@ -15,7 +18,14 @@ const Documents = () => {
   const navigate = useNavigate();
   
   // Check Supabase connection and get submit function
-  const { isConnected: supabaseConnected, submitDocument: submitToSupabase } = useSupabaseRealTimeDocuments();
+  const { isConnected: supabaseConnected, submitDocument: submitToSupabase, refetch } = useSupabaseRealTimeDocuments();
+  const { isConnected: storeConnected, checkConnection } = useSupabaseStore();
+  const { addApprovalCard, addTrackingCard } = useDocumentStore();
+
+  // Check connection on mount
+  useEffect(() => {
+    checkConnection();
+  }, [checkConnection]);
 
   const handleLogout = () => {
     logout();
@@ -32,7 +42,9 @@ const Documents = () => {
 
   const handleDocumentSubmit = async (data: any) => {
     console.log("Document submitted:", data);
-    console.log("🔌 Supabase connected:", supabaseConnected);
+    // Use store connection status as source of truth
+    const actuallyConnected = storeConnected || supabaseConnected;
+    console.log("🔌 Supabase connected:", actuallyConnected);
     
     // Use auth context directly - NO localStorage
     const currentUserName = user?.name || user?.email?.split('@')[0] || 'User';
@@ -100,7 +112,7 @@ const Documents = () => {
     // ========================================
     // SUPABASE PATH: Use Supabase when connected
     // ========================================
-    if (supabaseConnected) {
+    if (actuallyConnected) {
       console.log('🚀 Using Supabase for document submission');
       
       try {
@@ -180,6 +192,14 @@ const Documents = () => {
           supabaseId: supabaseDoc.id
         };
 
+        // Add to Zustand store for immediate UI update
+        console.log('📦 [Zustand] Adding approval card to store for immediate UI update');
+        addApprovalCard(approvalCard);
+        addTrackingCard({
+          ...trackingCard,
+          trackingId: trackingCard.id
+        });
+
         // Dispatch events for real-time UI updates (Supabase handles persistence)
         window.dispatchEvent(new CustomEvent('document-approval-created', {
           detail: { document: trackingCard, approval: approvalCard }
@@ -190,6 +210,18 @@ const Documents = () => {
         window.dispatchEvent(new CustomEvent('document-submitted', {
           detail: { trackingCard, approvalCards: [approvalCard] }
         }));
+        window.dispatchEvent(new CustomEvent('workflow-updated', {
+          detail: { trackingCard }
+        }));
+        window.dispatchEvent(new CustomEvent('supabase-document-created', {
+          detail: { document: supabaseDoc }
+        }));
+
+        // Trigger refetch to sync with Supabase data
+        console.log('🔄 [Supabase] Triggering refetch to sync approval cards');
+        setTimeout(() => {
+          refetch().catch(err => console.error('Refetch failed:', err));
+        }, 1000);
 
         // Send notifications
         await sendNotifications(data.recipients, data.title, currentUserName, data.priority);

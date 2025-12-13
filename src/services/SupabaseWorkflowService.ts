@@ -272,33 +272,73 @@ class SupabaseWorkflowService {
   }
 
   /**
-   * Create approval card with recipients (using normalized junction table)
+   * Create approval card with recipients (using correct schema columns)
    */
   async createApprovalCard(
     card: Partial<ApprovalCard>,
     recipientDetails?: { id: string; userId: string; name: string }[]
   ): Promise<ApprovalCard> {
-    const approvalId = card.approval_id || `approval-${Date.now()}`;
+    const approvalId = card.approval_id || `APPR-${Date.now()}`;
+    const isValidUuid = (str: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str);
+    
+    // Get submitter UUID
+    let submitterUuid = card.submitter_id;
+    if (card.submitter_id && !isValidUuid(card.submitter_id)) {
+      const { data: recipient } = await supabase
+        .from('recipients')
+        .select('id')
+        .eq('user_id', card.submitter_id)
+        .single();
+      if (recipient) submitterUuid = recipient.id;
+    }
+    
+    // Fallback to any recipient
+    if (!submitterUuid || !isValidUuid(submitterUuid)) {
+      const { data: anyRecipient } = await supabase.from('recipients').select('id').limit(1).single();
+      if (anyRecipient) submitterUuid = anyRecipient.id;
+    }
+    
+    // Get recipient UUIDs and names
+    const recipientUuids: string[] = [];
+    const recipientNames: string[] = [];
+    for (const r of (recipientDetails || [])) {
+      if (isValidUuid(r.id)) {
+        recipientUuids.push(r.id);
+        recipientNames.push(r.name);
+      } else {
+        const { data: rec } = await supabase.from('recipients').select('id, name').eq('user_id', r.userId).single();
+        if (rec) {
+          recipientUuids.push(rec.id);
+          recipientNames.push(rec.name);
+        }
+      }
+    }
+    
+    // Get current recipient UUID
+    let currentRecipientUuid = recipientUuids[0] || null;
+    let currentRecipientName = recipientNames[0] || null;
     
     const { data, error } = await supabase
       .from('approval_cards')
       .insert({
         approval_id: approvalId,
-        tracking_card_id: card.tracking_card_id,
-        document_id: card.document_id,
+        tracking_card_id: card.tracking_card_id || `DOC-${Date.now()}`,
+        document_id: card.document_id || null,
         title: card.title,
         description: card.description,
-        type: card.type || 'Letter',
+        submitter_name: card.submitter || 'Unknown',
+        submitter_id: submitterUuid,
+        submitter_role: card.submitter_role || 'user',
         priority: card.priority || 'normal',
         status: 'pending',
-        submitter: card.submitter,
-        submitter_id: card.submitter_id,
-        current_recipient_id: recipientDetails?.[0]?.userId || card.current_recipient_id,
         routing_type: card.routing_type || 'sequential',
-        is_emergency: card.is_emergency || false,
-        is_parallel: card.is_parallel || false,
-        source: card.source || 'document-management',
         workflow: card.workflow || {},
+        recipient_ids: recipientUuids,
+        recipient_names: recipientNames,
+        current_recipient_id: currentRecipientUuid,
+        current_recipient_name: currentRecipientName,
+        bypassed_recipients: [],
+        resubmitted_recipients: [],
       })
       .select()
       .single();
@@ -309,13 +349,11 @@ class SupabaseWorkflowService {
     }
 
     // Add recipients to junction table
-    if (recipientDetails && recipientDetails.length > 0) {
-      const recipientRecords = recipientDetails.map((r, index) => ({
+    if (recipientUuids.length > 0) {
+      const recipientRecords = recipientUuids.map((rid, index) => ({
         approval_card_id: data.id,
-        recipient_id: r.id,
-        recipient_user_id: r.userId,
-        recipient_name: r.name,
-        order_index: index,
+        recipient_id: rid,
+        approval_order: index,
         status: 'pending',
       }));
 

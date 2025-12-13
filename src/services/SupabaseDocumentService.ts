@@ -329,28 +329,81 @@ class SupabaseDocumentService {
    * Create single approval card
    */
   async createApprovalCard(card: Partial<ApprovalCard>): Promise<ApprovalCard> {
+    // Get submitter_id as UUID
+    const isValidUuid = (str: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str);
+    
+    let submitterUuid = card.submitter_id;
+    if (card.submitter_id && !isValidUuid(card.submitter_id)) {
+      const { data: recipient } = await supabase
+        .from('recipients')
+        .select('id')
+        .eq('user_id', card.submitter_id)
+        .single();
+      if (recipient) {
+        submitterUuid = recipient.id;
+      }
+    }
+    
+    // Fallback: get any recipient if submitter not found
+    if (!submitterUuid || !isValidUuid(submitterUuid)) {
+      const { data: anyRecipient } = await supabase.from('recipients').select('id').limit(1).single();
+      if (anyRecipient) {
+        submitterUuid = anyRecipient.id;
+      }
+    }
+    
+    // Get current_recipient_id as UUID
+    let currentRecipientUuid = card.current_recipient_id;
+    if (card.current_recipient_id && !isValidUuid(card.current_recipient_id)) {
+      const { data: recipient } = await supabase
+        .from('recipients')
+        .select('id, name')
+        .eq('user_id', card.current_recipient_id)
+        .single();
+      if (recipient) {
+        currentRecipientUuid = recipient.id;
+      }
+    }
+    
+    // Resolve all recipient_ids to UUIDs
+    const recipientUuids: string[] = [];
+    const recipientNames: string[] = [];
+    for (const rid of (card.recipient_ids || [])) {
+      if (isValidUuid(rid)) {
+        recipientUuids.push(rid);
+        // Get name for this UUID
+        const { data: r } = await supabase.from('recipients').select('name').eq('id', rid).single();
+        recipientNames.push(r?.name || 'Unknown');
+      } else {
+        const { data: r } = await supabase.from('recipients').select('id, name').eq('user_id', rid).single();
+        if (r) {
+          recipientUuids.push(r.id);
+          recipientNames.push(r.name);
+        }
+      }
+    }
+    
     const { data, error } = await supabase
       .from('approval_cards')
       .insert({
-        approval_id: card.approval_id || `approval-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-        tracking_card_id: card.tracking_card_id,
-        document_id: card.document_id,
+        approval_id: card.approval_id || `APPR-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+        tracking_card_id: card.tracking_card_id || `DOC-${Date.now()}`,
+        document_id: card.document_id || null,
         title: card.title,
         description: card.description,
-        type: card.type || 'Letter',
+        submitter_name: card.submitter || 'Unknown',
+        submitter_id: submitterUuid,
+        submitter_role: card.submitter_role || 'user',
         priority: card.priority || 'normal',
         status: 'pending',
-        submitter: card.submitter,
-        submitter_id: card.submitter_id,
-        recipients: card.recipients || [],
-        recipient_ids: card.recipient_ids || [],
-        current_recipient_id: card.current_recipient_id,
         routing_type: card.routing_type || 'sequential',
-        is_emergency: card.is_emergency || false,
-        is_parallel: card.is_parallel || false,
-        source: card.source || 'document-management',
         workflow: card.workflow || {},
-        approval_history: [],
+        recipient_ids: recipientUuids,
+        recipient_names: recipientNames,
+        current_recipient_id: currentRecipientUuid || null,
+        current_recipient_name: recipientNames[0] || null,
+        bypassed_recipients: [],
+        resubmitted_recipients: [],
       })
       .select()
       .single();

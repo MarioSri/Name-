@@ -12,6 +12,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { RecipientSelector } from "@/components/RecipientSelector";
 import { supabaseStorage } from "@/services/SupabaseStorageService";
 import { useSupabaseRealTimeDocuments } from "@/hooks/useSupabaseRealTimeDocuments";
+import { useDocumentStore } from "@/stores/documentStore";
 import { getRecipientName } from "@/utils/recipientUtils";
 import { 
   AlertTriangle, 
@@ -82,7 +83,8 @@ interface EmergencyWorkflowInterfaceProps {
 
 export const EmergencyWorkflowInterface: React.FC<EmergencyWorkflowInterfaceProps> = ({ userRole }) => {
   const { user } = useAuth();
-  const { isConnected: supabaseConnected, createEmergencyDocument: submitToSupabase } = useSupabaseRealTimeDocuments();
+  const { isConnected: supabaseConnected, createEmergencyDocument: submitToSupabase, refetch } = useSupabaseRealTimeDocuments();
+  const { addApprovalCard, addTrackingCard } = useDocumentStore();
   const [isEmergencyMode, setIsEmergencyMode] = useState(false);
   const [selectedRecipients, setSelectedRecipients] = useState<string[]>([]);
   const [viewingFile, setViewingFile] = useState<File | null>(null);
@@ -605,13 +607,7 @@ export const EmergencyWorkflowInterface: React.FC<EmergencyWorkflowInterfaceProp
 
         console.log('✅ [Supabase] Emergency document created:', supabaseDoc.id);
 
-        // Also save to localStorage for backward compatibility
-        const existingDocs = JSON.parse(localStorage.getItem('submitted-documents') || '[]');
-        const trackingCardWithSupabaseId = { ...trackingCard, supabaseId: supabaseDoc.id };
-        existingDocs.unshift(trackingCardWithSupabaseId);
-        localStorage.setItem('submitted-documents', JSON.stringify(existingDocs));
-
-        // Create localStorage approval card for backward compatibility
+        // Create approval card for Zustand store
         const approvalCard = {
           id: docId,
           title: emergencyData.title,
@@ -632,12 +628,18 @@ export const EmergencyWorkflowInterface: React.FC<EmergencyWorkflowInterfaceProp
           isCustomAssignment: false,
           supabaseId: supabaseDoc.id
         };
+        
+        const trackingCardWithSupabaseId = { ...trackingCard, supabaseId: supabaseDoc.id };
 
-        const existingApprovals = JSON.parse(localStorage.getItem('pending-approvals') || '[]');
-        existingApprovals.unshift(approvalCard);
-        localStorage.setItem('pending-approvals', JSON.stringify(existingApprovals));
+        // Add to Zustand store for immediate UI update (NO localStorage)
+        console.log('📦 [Zustand] Adding emergency approval card to store for immediate UI update');
+        addApprovalCard(approvalCard);
+        addTrackingCard({
+          ...trackingCardWithSupabaseId,
+          trackingId: trackingCardWithSupabaseId.id
+        });
 
-        // Dispatch events
+        // Dispatch events for UI updates
         window.dispatchEvent(new CustomEvent('emergency-document-created', { 
           detail: { document: trackingCardWithSupabaseId } 
         }));
@@ -647,6 +649,21 @@ export const EmergencyWorkflowInterface: React.FC<EmergencyWorkflowInterfaceProp
         window.dispatchEvent(new CustomEvent('approval-card-created', { 
           detail: { approval: approvalCard } 
         }));
+        window.dispatchEvent(new CustomEvent('document-submitted', {
+          detail: { trackingCard: trackingCardWithSupabaseId, approvalCards: [approvalCard] }
+        }));
+        window.dispatchEvent(new CustomEvent('workflow-updated', {
+          detail: { trackingCard: trackingCardWithSupabaseId }
+        }));
+        window.dispatchEvent(new CustomEvent('supabase-document-created', {
+          detail: { document: supabaseDoc }
+        }));
+
+        // Trigger refetch to sync with Supabase data
+        console.log('🔄 [Supabase] Triggering refetch to sync emergency approval cards');
+        setTimeout(() => {
+          refetch().catch(err => console.error('Refetch failed:', err));
+        }, 1000);
 
         // Auto-create channel
         createEmergencyChannel(docId, emergencyData.title, currentUserName, selectedRecipients);

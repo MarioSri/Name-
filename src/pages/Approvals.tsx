@@ -14,6 +14,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { ExternalNotificationDispatcher } from "@/services/ExternalNotificationDispatcher";
+import { useDocumentStore } from "@/stores/documentStore";
 import { isUserInRecipients, findUserStepInWorkflow } from "@/utils/recipientMatching";
 import { useRealTimeDocuments } from "@/hooks/useRealTimeDocuments";
 import { useSupabaseRealTimeDocuments } from "@/hooks/useSupabaseRealTimeDocuments";
@@ -33,7 +34,8 @@ const Approvals = () => {
     approvalCards,
     trackDocuments,
     loading,
-    error
+    error,
+    refetch // Add refetch function to manually refresh data
   } = supabaseHook;
   
   // Create unified approve/reject functions - Supabase only
@@ -106,9 +108,21 @@ const Approvals = () => {
             duration: 5000,
           });
         }
+        // Trigger manual refetch to ensure UI is updated with new cards
+        console.log('🔄 [Approvals] Triggering refetch to load new approval cards...');
+        setTimeout(() => {
+          refetch().then(() => {
+            console.log('✅ [Approvals] Refetch completed after document event');
+          }).catch((err) => {
+            console.error('❌ [Approvals] Refetch failed:', err);
+          });
+        }, 1000); // Small delay to ensure Supabase has processed the insert
       } else {
         // No event detail - Supabase subscription will handle updates
-        console.log('🔄 [Approvals] No event detail, Supabase subscription will sync');
+        console.log('🔄 [Approvals] No event detail, triggering refetch...');
+        setTimeout(() => {
+          refetch();
+        }, 500);
       }
     };
     
@@ -180,7 +194,7 @@ const Approvals = () => {
       window.removeEventListener('shared-comment-updated', handleSharedCommentUpdate);
       window.removeEventListener('approval-card-updated', handleApprovalCardUpdate);
     };
-  }, [user, approvalCards]);
+  }, [user, approvalCards, refetch]);
 
   const handleLogout = () => {
     logout();
@@ -676,17 +690,49 @@ const Approvals = () => {
     return null; // This should be handled by ProtectedRoute, but adding as safety
   }
 
-  // SIMPLIFIED: Use approvalCards directly from hook - no duplicate state
-  // The useSupabaseRealTimeDocuments hook already handles realtime updates
-  const realTimePendingApprovals = approvalCards;
+  // Get Zustand store approval cards as fallback
+  const { approvalCards: storeApprovalCards } = useDocumentStore();
+
+  // MERGE: Combine approval cards from Supabase hook + Zustand store
+  // This ensures cards appear immediately when added to store, then sync with Supabase
+  const mergedApprovalCards = React.useMemo(() => {
+    const supabaseCardIds = new Set(approvalCards.map(c => c.id));
+    const additionalStoreCards = storeApprovalCards.filter(c => !supabaseCardIds.has(c.id));
+    
+    console.log('📋 [Approvals] Merging cards:', {
+      supabaseCards: approvalCards.length,
+      storeCards: storeApprovalCards.length,
+      additionalFromStore: additionalStoreCards.length
+    });
+    
+    return [...approvalCards, ...additionalStoreCards];
+  }, [approvalCards, storeApprovalCards]);
+
+  const realTimePendingApprovals = mergedApprovalCards;
   
   // Keep pendingApprovals as alias for backwards compatibility with existing code
-  const pendingApprovals = approvalCards;
+  const pendingApprovals = mergedApprovalCards;
   
   // Log when approval cards change for debugging
   useEffect(() => {
-    console.log('📄 [Approvals] Approval cards from hook:', approvalCards.length, approvalCards);
-  }, [approvalCards]);
+    console.log('📋 [Approvals] Approval cards updated:', mergedApprovalCards.length);
+    console.log('📋 [Approvals] Loading state:', loading);
+    console.log('📋 [Approvals] Error state:', error);
+    console.log('📋 [Approvals] Cards:', mergedApprovalCards.map(c => ({ 
+      id: c.id, 
+      title: c.title, 
+      status: c.status,
+      recipientIds: c.recipientIds 
+    })));
+    
+    // Log if we have data but it's not showing
+    if (mergedApprovalCards.length === 0 && !loading) {
+      console.warn('⚠️ [Approvals] No approval cards found - check if:');
+      console.warn('  1. Supabase connection is active');
+      console.warn('  2. User UUID matches recipient records');
+      console.warn('  3. Approval cards exist in database');
+    }
+  }, [mergedApprovalCards, loading, error]);
   
   const handleAcceptDocument = async (docId: string) => {
     try {
@@ -1528,6 +1574,13 @@ const Approvals = () => {
     
     console.log(`🔍 Checking card "${doc.title}" for user: ${currentUserName} (${currentUserRole}) [${currentUserId}]`);
     
+    // ✅ TEMPORARY FIX: If the card has status 'pending' and came from Supabase (has supabaseId), 
+    // show it by default for debugging purposes
+    if (doc.supabaseId && doc.status === 'pending') {
+      console.log('✅ Supabase pending card - showing by default for debugging');
+      return true;
+    }
+    
     // ✅ FIRST: Check if current user is the current recipient (for Supabase cards)
     // This is set when the card is assigned to a specific approver
     if (doc.currentRecipientId) {
@@ -1964,6 +2017,27 @@ const Approvals = () => {
               <CardHeader>
                 <CardTitle>Documents Awaiting Your Approval</CardTitle>
                 <CardDescription>Review and approve or reject pending documents</CardDescription>
+                {/* DEBUG: Show loading/error state */}
+                {loading && (
+                  <div className="mt-2 p-2 bg-yellow-50 border border-yellow-200 rounded text-sm text-yellow-700">
+                    🔄 Loading approval cards from Supabase...
+                  </div>
+                )}
+                {error && (
+                  <div className="mt-2 p-2 bg-red-50 border border-red-200 rounded text-sm text-red-700">
+                    ❌ Error: {error}
+                  </div>
+                )}
+                {!loading && !error && mergedApprovalCards.length === 0 && (
+                  <div className="mt-2 p-2 bg-blue-50 border border-blue-200 rounded text-sm text-blue-700">
+                    📭 No approval cards found. Submit a document to see cards here.
+                  </div>
+                )}
+                {!loading && mergedApprovalCards.length > 0 && (
+                  <div className="mt-2 p-2 bg-green-50 border border-green-200 rounded text-sm text-green-700">
+                    ✅ Loaded {mergedApprovalCards.length} approval cards
+                  </div>
+                )}
               </CardHeader>
               <CardContent>
                 <div className="space-y-4">

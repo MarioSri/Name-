@@ -8,6 +8,7 @@ import { Progress } from "@/components/ui/progress";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
+import { useAuth } from "@/contexts/AuthContext";
 import { 
   Search, 
   FileText, 
@@ -230,6 +231,7 @@ export const DocumentTracker: React.FC<DocumentTrackerProps> = ({ userRole, user
   const [approvalComments, setApprovalComments] = useState<{[key: string]: any[]}>({});
 
   const { toast } = useToast();
+  const { user } = useAuth();
   
   // Use Supabase only - no localStorage fallback
   const supabaseHook = useSupabaseRealTimeDocuments();
@@ -253,13 +255,56 @@ export const DocumentTracker: React.FC<DocumentTrackerProps> = ({ userRole, user
     console.log('📄 [Track Documents] Documents:', trackDocuments);
   }, [trackDocuments]);
 
-  // SIMPLIFIED: Directly update submittedDocuments when trackDocuments changes
+  // Update submittedDocuments when trackDocuments changes (always update, even if empty)
   useEffect(() => {
-    if (trackDocuments.length > 0) {
-      console.log('📄 [Track Documents] Setting submittedDocuments:', trackDocuments.length);
-      setSubmittedDocuments(trackDocuments);
+    console.log('📄 [Track Documents] trackDocuments changed:', trackDocuments.length, 'documents');
+    console.log('📄 [Track Documents] Current user:', { 
+      id: user?.id, 
+      name: user?.name, 
+      role: user?.role,
+      userName: userName 
+    });
+    console.log('📄 [Track Documents] Documents from Supabase:', trackDocuments.map(d => ({ 
+      id: d.id, 
+      trackingId: d.trackingId,
+      title: d.title, 
+      submitter: d.submitter,
+      submitterId: d.submitterId,
+      submitterRole: d.submitterRole
+    })));
+    
+    // Convert DocumentData to Document format for compatibility
+    const convertedDocuments = trackDocuments.map(doc => ({
+      id: doc.trackingId || doc.id,
+      trackingId: doc.trackingId,
+      title: doc.title,
+      type: doc.type,
+      submittedBy: doc.submitter,
+      submitter: doc.submitter,
+      submittedByRole: doc.submitterRole,
+      submitterId: doc.submitterId,
+      submittedDate: doc.createdAt ? doc.createdAt.split('T')[0] : new Date().toISOString().split('T')[0],
+      status: doc.status,
+      priority: doc.priority,
+      description: doc.description,
+      workflow: doc.workflow,
+      files: doc.metadata?.files || [],
+      assignments: doc.metadata?.assignments || {},
+      comments: [],
+      supabaseId: doc.id,
+      ...doc
+    } as any));
+    
+    // Always update, even if empty (to clear old data)
+    setSubmittedDocuments(convertedDocuments);
+    
+    // Also update Zustand store if needed
+    if (convertedDocuments.length > 0) {
+      console.log('✅ [Track Documents] Updated submittedDocuments with', convertedDocuments.length, 'documents');
+    } else {
+      console.log('⚠️ [Track Documents] No documents to display. Check if user is submitter of any documents.');
     }
-  }, [trackDocuments]);
+  }, [trackDocuments, user, userName]);
   
   // Handle workflow updates - notifications only (data synced via Supabase realtime)
   useEffect(() => {
@@ -350,15 +395,33 @@ export const DocumentTracker: React.FC<DocumentTrackerProps> = ({ userRole, user
       if (event?.detail?.trackingCard) {
         const newCard = event.detail.trackingCard;
         console.log('✨ [Track Documents] New tracking card received:', newCard.title);
+        console.log('📋 [Track Documents] Card details:', newCard);
         
+        // Add to local state immediately for instant UI feedback
         setSubmittedDocuments(prev => {
-          const exists = prev.some(doc => doc.id === newCard.id);
+          const exists = prev.some(doc => 
+            doc.id === newCard.id || 
+            doc.trackingId === newCard.id ||
+            (doc.supabaseId && newCard.supabaseId && doc.supabaseId === newCard.supabaseId)
+          );
           if (!exists) {
-            console.log('✅ [Track Documents] Adding new tracking card to state');
-            return [newCard, ...prev];
+            console.log('✅ [Track Documents] Adding new tracking card to state immediately');
+            return [newCard as any, ...prev];
+          } else {
+            console.log('⚠️ [Track Documents] Card already exists, updating instead');
+            return prev.map(doc => 
+              (doc.id === newCard.id || doc.trackingId === newCard.id) ? newCard as any : doc
+            );
           }
-          return prev;
         });
+        
+        // Trigger refetch to get full data from Supabase
+        if (supabaseHook?.refetch) {
+          setTimeout(() => {
+            console.log('🔄 [Track Documents] Triggering refetch after event');
+            supabaseHook.refetch();
+          }, 500);
+        }
         
         toast({
           title: "Document Tracking Started",
@@ -421,12 +484,58 @@ export const DocumentTracker: React.FC<DocumentTrackerProps> = ({ userRole, user
       }
     };
     
+    // Listen for Supabase document creation events
+    const handleSupabaseDocumentCreated = (event: any) => {
+      console.log('📢 [Track Documents] Supabase document created event received:', event?.detail);
+      
+      // Trigger refetch from Supabase hook to get latest data
+      if (supabaseHook?.refetch) {
+        console.log('🔄 [Track Documents] Triggering refetch from Supabase hook');
+        // Use setTimeout to ensure Supabase has processed the insert
+        setTimeout(() => {
+          supabaseHook.refetch();
+        }, 300);
+      }
+      
+      // Also handle the document if provided for immediate UI feedback
+      if (event?.detail?.document) {
+        const doc = event.detail.document;
+        const trackingCard = {
+          id: doc.tracking_id || doc.id,
+          title: doc.title,
+          type: doc.type,
+          submitter: doc.submitter_name,
+          submittedBy: doc.submitter_name,
+          submittedDate: new Date(doc.created_at).toISOString().split('T')[0],
+          status: doc.status || 'pending',
+          priority: doc.priority,
+          description: doc.description,
+          workflow: doc.workflow || {},
+          files: doc.metadata?.files || [],
+          supabaseId: doc.id
+        };
+        
+        // Add to local state immediately for instant UI feedback
+        setSubmittedDocuments(prev => {
+          const exists = prev.some(d => d.id === trackingCard.id || d.supabaseId === doc.id);
+          if (!exists) {
+            console.log('✅ [Track Documents] Adding new tracking card immediately:', trackingCard.title);
+            return [trackingCard as any, ...prev];
+          }
+          return prev;
+        });
+        
+        handleDocumentSubmitted({ detail: { trackingCard } });
+      }
+    };
+
     window.addEventListener('approval-comments-changed', handleApprovalChanges);
     window.addEventListener('workflow-updated', handleWorkflowUpdate);
     window.addEventListener('emergency-document-created', handleEmergencyDocumentCreated as EventListener);
     window.addEventListener('document-approval-created', handleDocumentSubmitted);
     window.addEventListener('approval-card-created', handleDocumentSubmitted);
     window.addEventListener('document-submitted', handleDocumentSubmitted);
+    window.addEventListener('supabase-document-created', handleSupabaseDocumentCreated);
     window.addEventListener('document-signed', handleDocumentSigned);
     window.addEventListener('documenso-signature-completed', handleDocumentSigned);
     
@@ -439,6 +548,7 @@ export const DocumentTracker: React.FC<DocumentTrackerProps> = ({ userRole, user
       window.removeEventListener('document-approval-created', handleDocumentSubmitted);
       window.removeEventListener('approval-card-created', handleDocumentSubmitted);
       window.removeEventListener('document-submitted', handleDocumentSubmitted);
+      window.removeEventListener('supabase-document-created', handleSupabaseDocumentCreated);
       window.removeEventListener('document-signed', handleDocumentSigned);
       window.removeEventListener('documenso-signature-completed', handleDocumentSigned);
     };
@@ -521,27 +631,56 @@ export const DocumentTracker: React.FC<DocumentTrackerProps> = ({ userRole, user
       const submittedBy = doc.submittedBy || (doc as any).submitter;
       const submittedByRole = (doc as any).submittedByRole;
       const submittedByDesignation = (doc as any).submittedByDesignation;
+      const submitterId = (doc as any).submitterId;
       
-      return (
-        submittedBy === currentUserProfile.name ||
-        submittedBy === userRole ||
-        submittedByRole === userRole ||
-        submittedByDesignation === userRole ||
-        submittedByDesignation === currentUserProfile.designation
-      );
+      // Get current user info (from hook at top of component)
+      const currentUserName = user?.name || currentUserProfile.name || userName;
+      const currentUserId = user?.id;
+      const currentUserRole = user?.role || userRole;
+      
+      // Check multiple ways to match submitter
+      const matchesName = submittedBy === currentUserName || 
+                         submittedBy === currentUserProfile.name ||
+                         submittedBy === userName;
+      const matchesRole = submittedByRole === userRole || submittedByRole === currentUserRole;
+      const matchesDesignation = submittedByDesignation === userRole || 
+                                submittedByDesignation === currentUserProfile.designation;
+      const matchesId = submitterId === currentUserId;
+      
+      // Also check if submitter name contains user name or vice versa (for partial matches)
+      const nameContains = currentUserName && submittedBy && 
+                          (submittedBy.toLowerCase().includes(currentUserName.toLowerCase()) ||
+                           currentUserName.toLowerCase().includes(submittedBy.toLowerCase()));
+      
+      const isMatch = matchesName || matchesRole || matchesDesignation || matchesId || nameContains;
+      
+      return isMatch;
     };
     
     const shouldShow = notRemoved && matchesSearch && matchesStatus && matchesType && (isMockDocument || isSubmitter());
     
     // Debug logging for submitted documents
     if (!isMockDocument) {
+      const submittedBy = doc.submittedBy || (doc as any).submitter;
+      const currentUserName = user?.name || currentUserProfile.name || userName;
       console.log(`${shouldShow ? '✅' : '❌'} [Track Documents] "${doc.title}":`, {
-        submittedBy: doc.submittedBy,
+        submittedBy: submittedBy,
         submittedByRole: (doc as any).submittedByRole,
-        currentUserName: currentUserProfile.name,
+        submitterId: (doc as any).submitterId,
+        currentUserName: currentUserName,
+        currentUserId: user?.id,
+        userName: userName,
         currentUserRole: userRole,
+        userRoleFromAuth: user?.role,
         isSubmitter: isSubmitter(),
-        shouldShow: shouldShow
+        shouldShow: shouldShow,
+        docId: doc.id,
+        trackingId: (doc as any).trackingId,
+        docType: doc.type,
+        notRemoved,
+        matchesSearch,
+        matchesStatus,
+        matchesType
       });
     }
     
@@ -738,6 +877,27 @@ export const DocumentTracker: React.FC<DocumentTrackerProps> = ({ userRole, user
       <Card>
         <CardHeader>
           <CardTitle>Document Tracking & Review</CardTitle>
+          {/* DEBUG: Show loading/error state */}
+          {loading && (
+            <div className="mt-2 p-2 bg-yellow-50 border border-yellow-200 rounded text-sm text-yellow-700">
+              🔄 Loading documents from Supabase...
+            </div>
+          )}
+          {error && (
+            <div className="mt-2 p-2 bg-red-50 border border-red-200 rounded text-sm text-red-700">
+              ❌ Error: {error}
+            </div>
+          )}
+          {!loading && !error && trackDocuments.length === 0 && (
+            <div className="mt-2 p-2 bg-blue-50 border border-blue-200 rounded text-sm text-blue-700">
+              📭 No documents found in Supabase. Submit a document to see it here.
+            </div>
+          )}
+          {!loading && trackDocuments.length > 0 && (
+            <div className="mt-2 p-2 bg-green-50 border border-green-200 rounded text-sm text-green-700">
+              ✅ Loaded {trackDocuments.length} document(s) from Supabase
+            </div>
+          )}
         </CardHeader>
         <CardContent>
           <div className="flex flex-col md:flex-row gap-4">

@@ -123,16 +123,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     return hash.includes('access_token') || search.includes('code=');
   };
   
-  // If user was loaded from sessionStorage, don't show loading state
-  // BUT if this is an OAuth callback, always show loading until callback completes
-  const [isLoading, setIsLoading] = useState(() => {
-    if (isOAuthCallback()) {
-      console.log('🔐 OAuth callback detected, showing loading...');
-      return true; // Always loading during OAuth callback
-    }
-    const savedUser = sessionStorage.getItem('iaoms-user');
-    return !savedUser; // Only loading if no saved user
-  });
+  const [isLoading, setIsLoading] = useState(false);
 
   const isAuthenticated = !!user;
 
@@ -171,16 +162,17 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       const { data, error } = await supabase.auth.signInWithOAuth({
         provider: 'google',
         options: {
-          redirectTo: window.location.origin + '/auth/callback',
+          redirectTo: `${window.location.origin}/dashboard`,
           queryParams: {
             access_type: 'offline',
-            prompt: 'consent',
+            prompt: 'select_account',
           },
         },
       });
 
       if (error) throw error;
       console.log('✅ Google OAuth initiated');
+      // Note: User will be redirected, so we don't set loading to false here
     } catch (error) {
       console.error('Google login failed:', error);
       setIsLoading(false);
@@ -238,127 +230,56 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     setIsLoading(true);
     
     try {
-      // Map role to role_type in database
-      const roleTypeMap: { [key: string]: string } = {
-        'principal': 'PRINCIPAL',
-        'registrar': 'REGISTRAR',
-        'hod': 'HOD',
-        'program-head': 'Program Head',
-        'employee': 'EMPLOYEE'
+      // Fallback demo users - always available
+      const fallbackUsers: { [key: string]: Partial<User> } = {
+        'principal': {
+          id: 'principal-001',
+          name: 'Dr. Principal (Demo)',
+          email: 'principal@demo.edu',
+          department: 'Administration',
+          branch: 'Main Campus',
+        },
+        'registrar': {
+          id: 'registrar-001',
+          name: 'Prof. Registrar (Demo)',
+          email: 'registrar@demo.edu',
+          department: 'Administration',
+          branch: 'Main Campus',
+        },
+        'hod': {
+          id: 'hod-cse-001',
+          name: 'Dr. HOD CSE (Demo)',
+          email: 'hod.cse@demo.edu',
+          department: 'Computer Science',
+          branch: 'Main Campus',
+        },
+        'program-head': {
+          id: 'program-head-cse-001',
+          name: 'Prof. Program Head (Demo)',
+          email: 'ph.cse@demo.edu',
+          department: 'Computer Science',
+          branch: 'Main Campus',
+        },
+        'employee': {
+          id: 'faculty-cse-001',
+          name: 'Mr. Faculty (Demo)',
+          email: 'faculty.cse@demo.edu',
+          department: 'Computer Science',
+          branch: 'Main Campus',
+        },
       };
       
-      const roleType = roleTypeMap[role] || 'EMPLOYEE';
+      const fallback = fallbackUsers[role] || fallbackUsers['employee'];
       
-      // Try to get recipients from Supabase
-      let recipient = null;
-      try {
-        const recipients = await supabaseWorkflowService.getRecipients();
-        
-        // Find a recipient matching the role
-        recipient = recipients.find(r => 
-          r.role === roleType || 
-          r.role_type === roleType ||
-          r.role?.toUpperCase() === roleType.toUpperCase() ||
-          r.role_type?.toUpperCase() === roleType.toUpperCase() ||
-          (roleType === 'EMPLOYEE' && (r.role_type === 'EMPLOYEE' || r.role === 'EMPLOYEE'))
-        );
-        
-        console.log('📋 [AuthContext] Found recipients:', recipients.length, 'Matched:', recipient?.name, 'UUID:', recipient?.id);
-      } catch (supabaseError) {
-        console.warn('⚠️ [AuthContext] Supabase unavailable, using fallback:', supabaseError);
-      }
-      
-      // Create user object - use Supabase data if available, otherwise use fallback
-      let authenticatedUser: User;
-      
-      if (recipient) {
-        // Use data from Supabase - include UUID for foreign key references
-        authenticatedUser = {
-          id: recipient.user_id,          // user_id like "principal-001"
-          supabaseUuid: recipient.id,     // UUID from recipients.id column
-          name: recipient.name,
-          email: recipient.email,
-          role: role as User['role'],
-          department: recipient.department,
-          branch: recipient.branch,
-          avatar: recipient.avatar,
-          google_id: recipient.google_id,
-          permissions: getUserPermissions(role)
-        };
-      } else {
-        // Fallback demo users when Supabase is unavailable or empty
-        // NOTE: For production, replace these with real institutional users in the seed file
-        // and configure Google OAuth. These are only for development/testing.
-        const fallbackUsers: { [key: string]: Partial<User> } = {
-          'principal': {
-            id: 'principal-001',
-            name: 'Dr. Principal (Demo)',
-            email: 'principal@demo.edu',
-            department: 'Administration',
-            branch: 'Main Campus',
-          },
-          'registrar': {
-            id: 'registrar-001',
-            name: 'Prof. Registrar (Demo)',
-            email: 'registrar@demo.edu',
-            department: 'Administration',
-            branch: 'Main Campus',
-          },
-          'hod': {
-            id: 'hod-cse-001',
-            name: 'Dr. HOD CSE (Demo)',
-            email: 'hod.cse@demo.edu',
-            department: 'Computer Science',
-            branch: 'Main Campus',
-          },
-          'program-head': {
-            id: 'program-head-cse-001',
-            name: 'Prof. Program Head (Demo)',
-            email: 'ph.cse@demo.edu',
-            department: 'Computer Science',
-            branch: 'Main Campus',
-          },
-          'employee': {
-            id: 'faculty-cse-001',
-            name: 'Mr. Faculty (Demo)',
-            email: 'faculty.cse@demo.edu',
-            department: 'Computer Science',
-            branch: 'Main Campus',
-          },
-        };
-        
-        const fallback = fallbackUsers[role] || fallbackUsers['employee'];
-        
-        // Try to look up the UUID for the fallback user from Supabase
-        let fallbackUuid: string | undefined = undefined;
-        try {
-          const { data: fallbackRecipient } = await supabase
-            .from('recipients')
-            .select('id')
-            .eq('user_id', fallback.id)
-            .single();
-          
-          if (fallbackRecipient) {
-            fallbackUuid = fallbackRecipient.id;
-            console.log(`✅ [AuthContext] Found UUID for fallback user ${fallback.id}: ${fallbackUuid}`);
-          }
-        } catch {
-          console.warn(`⚠️ [AuthContext] Could not lookup UUID for fallback user ${fallback.id}`);
-        }
-        
-        authenticatedUser = {
-          id: fallback.id!,
-          supabaseUuid: fallbackUuid,  // May be undefined if lookup failed
-          name: fallback.name!,
-          email: fallback.email!,
-          role: role as User['role'],
-          department: fallback.department,
-          branch: fallback.branch,
-          permissions: getUserPermissions(role)
-        };
-        
-        console.warn('⚠️ [AuthContext] Using fallback user data (Supabase recipients table may be empty)');
-      }
+      const authenticatedUser: User = {
+        id: fallback.id!,
+        name: fallback.name!,
+        email: fallback.email!,
+        role: role as User['role'],
+        department: fallback.department,
+        branch: fallback.branch,
+        permissions: getUserPermissions(role)
+      };
 
       console.log('✅ [AuthContext] User authenticated:', {
         id: authenticatedUser.id,
@@ -406,6 +327,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
 
   // Listen for Supabase auth state changes (Google OAuth callback)
   useEffect(() => {
+    setIsLoading(false);
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
       console.log('🔐 Auth state changed:', event);
       
@@ -495,55 +417,8 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       }
     });
 
-    // Check initial session - only set loading to false if no saved user AND not OAuth callback
-    const checkSession = async () => {
-      try {
-        const hasSavedUser = sessionStorage.getItem('iaoms-user');
-        const isCallback = window.location.hash.includes('access_token') || window.location.search.includes('code=');
-        
-        if (isCallback) {
-          // Don't change loading state - let onAuthStateChange handle it
-          console.log('🔐 OAuth callback in progress, waiting for auth state change...');
-          
-          // Safety timeout - if OAuth callback takes too long, stop loading
-          setTimeout(() => {
-            setIsLoading(false);
-            console.warn('⚠️ OAuth callback timeout - showing login page');
-          }, 10000); // 10 second timeout
-          return;
-        }
-        
-        const { data: { session } } = await supabase.auth.getSession();
-        
-        if (!session && !hasSavedUser) {
-          setIsLoading(false);
-        } else if (hasSavedUser && !session) {
-          // User was loaded from sessionStorage, not from Supabase OAuth
-          setIsLoading(false);
-        }
-      } catch (error) {
-        console.error('❌ Failed to check session:', error);
-        // On error, stop loading and show login page
-        setIsLoading(false);
-      }
-    };
-    
-    checkSession();
-    
-    // Safety timeout - ensure loading never gets stuck forever
-    const safetyTimeout = setTimeout(() => {
-      setIsLoading(prevLoading => {
-        if (prevLoading) {
-          console.warn('⚠️ Loading timeout - forcing login page display');
-          return false;
-        }
-        return prevLoading;
-      });
-    }, 5000); // 5 second max loading time
-
     return () => {
       subscription.unsubscribe();
-      clearTimeout(safetyTimeout);
     };
   }, []);
 

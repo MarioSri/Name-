@@ -17,6 +17,7 @@ import { BiDirectionalWorkflowEngine } from '@/services/BiDirectionalWorkflowEng
 import { WorkflowRoute, WorkflowStep } from '@/types/workflow';
 import { channelAutoCreationService } from '@/services/ChannelAutoCreationService';
 import { useSupabaseRealTimeDocuments } from '@/hooks/useSupabaseRealTimeDocuments';
+import { useDocumentStore } from '@/stores/documentStore';
 import { cn } from '@/lib/utils';
 import { getRecipientName } from '@/utils/recipientUtils';
 import {
@@ -61,7 +62,8 @@ interface WorkflowConfigurationProps {
 export const WorkflowConfiguration: React.FC<WorkflowConfigurationProps> = ({ className, hideWorkflowsTab = false }) => {
   const { user } = useAuth();
   const { toast } = useToast();
-  const { isConnected: supabaseConnected, createApprovalChainDocument: submitToSupabase } = useSupabaseRealTimeDocuments();
+  const { isConnected: supabaseConnected, createApprovalChainDocument: submitToSupabase, refetch } = useSupabaseRealTimeDocuments();
+  const { addApprovalCard, addTrackingCard } = useDocumentStore();
   const [workflowEngine] = useState(() => new BiDirectionalWorkflowEngine());
   const [workflows, setWorkflows] = useState<WorkflowRoute[]>([]);
   const [selectedWorkflow, setSelectedWorkflow] = useState<WorkflowRoute | null>(null);
@@ -483,9 +485,32 @@ export const WorkflowConfiguration: React.FC<WorkflowConfigurationProps> = ({ cl
             supabaseId: supabaseDoc.id
           };
 
-          // Dispatch events (Supabase handles persistence)
+          // Add to Zustand store for immediate UI update
+          console.log('📦 [Zustand] Adding approval card to store for immediate UI update');
+          addApprovalCard(approvalCard);
+          addTrackingCard({
+            ...trackingCardWithSupabaseId,
+            trackingId: trackingCardWithSupabaseId.id
+          });
+
+          // Dispatch events for UI updates (Supabase handles persistence)
           window.dispatchEvent(new CustomEvent('workflow-updated', { detail: { trackingCard: trackingCardWithSupabaseId } }));
           window.dispatchEvent(new CustomEvent('approval-card-created', { detail: { approval: approvalCard } }));
+          window.dispatchEvent(new CustomEvent('document-submitted', {
+            detail: { trackingCard: trackingCardWithSupabaseId, approvalCards: [approvalCard] }
+          }));
+          window.dispatchEvent(new CustomEvent('document-approval-created', {
+            detail: { document: trackingCardWithSupabaseId, approval: approvalCard }
+          }));
+          window.dispatchEvent(new CustomEvent('supabase-document-created', {
+            detail: { document: supabaseDoc }
+          }));
+
+          // Trigger refetch to sync with Supabase data
+          console.log('🔄 [Supabase] Triggering refetch to sync approval cards');
+          setTimeout(() => {
+            refetch().catch(err => console.error('Refetch failed:', err));
+          }, 1000);
 
           // Auto-create channel
           createApprovalChainChannel(trackingCard.id, documentTitle, currentUserName, selectedRecipients, recipientNames);

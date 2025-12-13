@@ -9,6 +9,8 @@ import { useAuth } from '@/contexts/AuthContext';
 import { supabaseStorage, Document, ApprovalCard, Approval, Comment } from '@/services/SupabaseStorageService';
 import { supabase } from '@/lib/supabase';
 import { useToast } from '@/hooks/use-toast';
+import { useSupabaseStore } from '@/stores/supabaseStore';
+import { useDocumentStore } from '@/stores/documentStore';
 
 export interface DocumentData {
   id: string;
@@ -51,6 +53,7 @@ export interface ApprovalCardData {
   recipients: string[];
   recipientIds: string[];
   currentRecipientId?: string;
+  currentRecipientName?: string;
   routingType: string;
   isEmergency: boolean;
   isParallel: boolean;
@@ -60,6 +63,7 @@ export interface ApprovalCardData {
   comments?: string;
   createdAt: string;
   updatedAt: string;
+  supabaseId?: string; // Supabase UUID for reference
 }
 
 interface UseSupabaseRealTimeDocumentsResult {
@@ -126,16 +130,9 @@ function toDocumentData(doc: Document): DocumentData {
 
 // Convert Supabase ApprovalCard to ApprovalCardData
 function toApprovalCardData(card: ApprovalCard): ApprovalCardData {
-  // Handle recipients - could be array of objects or array of strings
-  const recipients = card.recipients?.map(r => {
-    if (typeof r === 'string') return r;
-    return r.recipient_name || '';
-  }) || [];
-  
-  const recipientIds = card.recipients?.map(r => {
-    if (typeof r === 'string') return r;
-    return r.recipient_user_id || '';
-  }) || [];
+  // Use direct arrays from Supabase schema: recipient_names and recipient_ids
+  const recipients = card.recipient_names || [];
+  const recipientIds = card.recipient_ids || [];
 
   return {
     id: card.id,
@@ -144,28 +141,32 @@ function toApprovalCardData(card: ApprovalCard): ApprovalCardData {
     trackingCardId: card.tracking_card_id,
     title: card.title,
     description: card.description,
-    type: card.type,
+    type: card.routing_type || 'approval', // Use routing_type since 'type' doesn't exist in schema
     priority: card.priority,
     status: card.status,
-    submitter: card.submitter,
+    submitter: card.submitter_name || card.submitter || 'Unknown', // Use submitter_name from schema
     submitterId: card.submitter_id,
     recipients,
     recipientIds,
     currentRecipientId: card.current_recipient_id,
+    currentRecipientName: card.current_recipient_name,
     routingType: card.routing_type,
-    isEmergency: card.is_emergency,
-    isParallel: card.is_parallel,
-    source: card.source,
+    isEmergency: card.priority === 'urgent' || card.priority === 'emergency',
+    isParallel: card.routing_type === 'parallel',
+    source: 'supabase',
     workflow: card.workflow,
-    comments: card.comments,
+    comments: '',
     createdAt: card.created_at,
     updatedAt: card.updated_at,
+    supabaseId: card.id, // Add supabaseId for UI filtering - CRITICAL for cards to show
   };
 }
 
 export function useSupabaseRealTimeDocuments(): UseSupabaseRealTimeDocumentsResult {
   const { user } = useAuth();
   const { toast } = useToast();
+  const { isConnected, checkConnection, setConnected } = useSupabaseStore();
+  const { setTrackingCards, setApprovalCards: setStoreApprovalCards } = useDocumentStore();
   
   const [trackDocuments, setTrackDocuments] = useState<DocumentData[]>([]);
   const [approvalCards, setApprovalCards] = useState<ApprovalCardData[]>([]);
@@ -173,7 +174,6 @@ export function useSupabaseRealTimeDocuments(): UseSupabaseRealTimeDocumentsResu
   const [comments, setComments] = useState<Record<string, Comment[]>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [isConnected, setIsConnected] = useState(false);
   
   const subscriptionsRef = useRef<any[]>([]);
   const loadDataTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -206,33 +206,37 @@ export function useSupabaseRealTimeDocuments(): UseSupabaseRealTimeDocumentsResu
       
       if (!supabaseUuid) {
         // Look up from recipients table using user_id
+        console.log('🔍 [Supabase] Looking up recipient by user_id:', user.id);
         const recipient = await supabaseStorage.getRecipientByUserId(user.id);
         supabaseUuid = recipient?.id;
+        console.log('🔍 [Supabase] Recipient lookup result:', recipient);
         
         // If still no UUID, try the user.id directly (it might already be a UUID)
         if (!supabaseUuid) {
           const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(user.id);
           if (isUuid) {
             supabaseUuid = user.id;
+            console.log('🔍 [Supabase] Using user.id as UUID directly:', supabaseUuid);
           } else {
             console.warn('⚠️ [Supabase] Could not find recipient UUID for user:', user.id);
-            // Keep existing data if we have it, don't clear on UUID lookup failure
-            if (lastSuccessfulDataRef.current) {
-              console.log('📦 [Supabase] Keeping cached data since UUID lookup failed');
-              setIsConnected(false);
-              return;
-            }
+            console.warn('⚠️ [Supabase] Will continue without UUID filtering to fetch all pending cards');
+            // DON'T return early - continue to load data without UUID filtering
           }
         }
       }
       
-      console.log('🔍 [Supabase] Loading data for user:', user.id, '→ UUID:', supabaseUuid);
+      console.log('🔍 [Supabase] Loading data for user:', user.id, '→ UUID:', supabaseUuid || '(none - will use fallback)');
       
       // Get user's submitted documents (tracking cards)
+      console.log('📥 [Supabase] Fetching documents by submitter...');
       const docs = await supabaseStorage.getDocumentsBySubmitter(supabaseUuid || user.id);
+      console.log('📥 [Supabase] Documents fetched:', docs.length);
       
       // Get approval cards for this user
+      console.log('📥 [Supabase] Fetching approval cards for recipient...');
       const cards = await supabaseStorage.getApprovalCardsByRecipient(supabaseUuid || user.id);
+      console.log('📥 [Supabase] Approval cards fetched:', cards.length);
+      console.log('📥 [Supabase] Cards detail:', cards.map(c => ({ id: c.id, title: c.title, status: c.status })));
 
       // Convert to frontend format - SUPABASE DATA ONLY
       const supabaseDocs = docs.map(toDocumentData);
@@ -246,13 +250,54 @@ export function useSupabaseRealTimeDocuments(): UseSupabaseRealTimeDocumentsResu
       setTrackDocuments(supabaseDocs);
       setApprovalCards(supabaseCards);
 
-      setIsConnected(true);
+      // Update Zustand document store
+      setTrackingCards(supabaseDocs.map(doc => ({
+        id: doc.trackingId || doc.id,
+        trackingId: doc.trackingId,
+        title: doc.title,
+        type: doc.type,
+        submitter: doc.submitter,
+        submittedDate: doc.createdAt.split('T')[0],
+        status: doc.status,
+        priority: doc.priority,
+        workflow: doc.workflow,
+        description: doc.description,
+        files: doc.metadata?.files || [],
+        assignments: doc.metadata?.assignments || {},
+        comments: [],
+        supabaseId: doc.id,
+        ...doc
+      })));
+      setStoreApprovalCards(supabaseCards.map(card => ({
+        id: card.approvalId || card.id,
+        title: card.title,
+        type: card.type,
+        submitter: card.submitter,
+        submittedDate: card.createdAt.split('T')[0],
+        status: card.status,
+        priority: card.priority,
+        description: card.description,
+        recipients: card.recipients,
+        recipientIds: card.recipientIds,
+        files: card.metadata?.files || [],
+        trackingCardId: card.trackingCardId,
+        supabaseId: card.id,
+        ...card
+      })));
+
+      // Update connection state in store
+      setConnected(true);
       hasInitialLoadRef.current = true;
       console.log('✅ [Supabase] Loaded', supabaseDocs.length, 'documents,', supabaseCards.length, 'approval cards');
     } catch (err) {
       console.error('❌ [Supabase] Error loading data:', err);
       setError(err instanceof Error ? err.message : 'Failed to load data');
-      setIsConnected(false);
+      
+      // Check actual connection status
+      const actuallyConnected = await checkConnection();
+      if (!actuallyConnected) {
+        setConnected(false);
+      }
       
       // IMPORTANT: Preserve existing data on error - don't clear state
       // Only clear if we haven't ever loaded data successfully
@@ -303,12 +348,24 @@ export function useSupabaseRealTimeDocuments(): UseSupabaseRealTimeDocumentsResu
 
   // Set up real-time subscriptions - only depends on user.id
   useEffect(() => {
-    if (!user?.id) return;
+    if (!user?.id) {
+      setLoading(false);
+      return;
+    }
 
     let isMounted = true;
     
-    // Load initial data
-    loadDataRef.current();
+    // Check connection first, then load data
+    // IMPORTANT: Load data regardless of connection check result
+    // The loadData function has fallbacks for when UUID lookup fails
+    checkConnection().then((connected) => {
+      if (isMounted) {
+        console.log('🔌 Supabase connection check result:', connected);
+        // Always try to load data - even if connection check fails
+        // The anon key should still allow data access
+        loadDataRef.current();
+      }
+    });
 
     // Setup subscriptions with proper Supabase UUID lookup
     const setupSubscriptions = async () => {
@@ -363,11 +420,12 @@ export function useSupabaseRealTimeDocuments(): UseSupabaseRealTimeDocumentsResu
         });
 
         subscriptionsRef.current = [docChannel, approvalChannel, allApprovalChannel];
-        setIsConnected(true);
+        setConnected(true);
         console.log('✅ [Supabase] Realtime subscriptions established');
       } catch (err) {
         console.error('❌ [Supabase] Failed to setup subscriptions:', err);
-        setIsConnected(false);
+        const actuallyConnected = await checkConnection();
+        setConnected(actuallyConnected);
       }
     };
 
@@ -534,11 +592,26 @@ export function useSupabaseRealTimeDocuments(): UseSupabaseRealTimeDocumentsResu
         console.log(`✅ Parallel approval cards created for ${recipientDetails.length} recipients`);
       }
 
-      // Dispatch event for other components
-      window.dispatchEvent(new CustomEvent('supabase-document-created', { detail: { document: doc } }));
-
       const result = toDocumentData(doc);
       result.trackingId = trackingId; // Ensure trackingId is returned
+
+      // Dispatch events for UI updates
+      window.dispatchEvent(new CustomEvent('supabase-document-created', { detail: { document: doc } }));
+      window.dispatchEvent(new CustomEvent('document-submitted', { 
+        detail: { 
+          trackingCard: result,
+          approvalCards: [] // Will be populated by real-time subscription
+        } 
+      }));
+      window.dispatchEvent(new CustomEvent('workflow-updated', { 
+        detail: { trackingCard: result } 
+      }));
+
+      // Trigger immediate refetch to update UI with new document and approval cards
+      setTimeout(() => {
+        debouncedLoadDataRef.current();
+      }, 500); // Small delay to ensure Supabase has processed the insert
+
       return result;
     } catch (err) {
       console.error('❌ [Supabase] submitDocument failed:', err);
